@@ -433,5 +433,6 @@ void DrawingCanvas::pushState() {
 }
 
 void DrawingCanvas::restoreState(SDL_Surface* surf) {
+    SDL_FillRect(canvas, nullptr, SDL_MapRGBA(canvas->format, 0,0,0,0));
     SDL_BlitSurface(surf, nullptr, canvas, nullptr);
 }

@@ -538,6 +538,7 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
                 Uint8 r, g, b;
                 hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
                 canvas.setColor(r, g, b);
+                generateColorWheelTexture();
                 return;
             }
 
@@ -549,6 +550,7 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
                 Uint8 r, g, b;
                 hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
                 canvas.setColor(r, g, b);
+                generateColorWheelTexture();
                 return;
             }
 
