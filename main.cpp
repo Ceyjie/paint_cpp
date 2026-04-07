@@ -270,12 +270,19 @@ private:
 // ---------- PiPaint member function implementations ----------
 
 PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
-    setenv("SDL_VIDEODRIVER", "kmsdrm", 0);
-    setenv("SDL_FBDEV", "/dev/fb0", 0);
+    const char* videoDrivers[] = {"kmsdrm", "fbdev", "directfb", nullptr};
+    for (int i = 0; videoDrivers[i]; i++) {
+        setenv("SDL_VIDEODRIVER", videoDrivers[i], 1);
+        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
+            SDL_DisplayMode dm;
+            if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
+                std::cout << "Using video driver: " << videoDrivers[i] << std::endl;
+                break;
+            }
+            SDL_Quit();
+        }
+    }
     
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
-    
-    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
     IMG_Init(IMG_INIT_PNG);
     TTF_Init();
 
@@ -285,8 +292,21 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     height = dm.h;
     window = SDL_CreateWindow("Pi Paint", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                width, height, SDL_WINDOW_FULLSCREEN_DESKTOP);
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_SOFTWARE);
+    if (!window) {
+        std::cerr << "Failed to create window: " << SDL_GetError() << std::endl;
+        exit(1);
+    }
+    
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    if (!renderer) {
+        std::cerr << "Failed to create renderer: " << SDL_GetError() << std::endl;
+        exit(1);
+    }
+    SDL_RendererInfo info;
+    SDL_GetRendererInfo(renderer, &info);
+    std::cout << "Renderer: " << info.name << std::endl;
+    
     canvasTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
     fontTiny   = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13);
     fontSmall  = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20);
