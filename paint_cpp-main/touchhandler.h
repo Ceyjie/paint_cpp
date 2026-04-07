@@ -4,9 +4,8 @@
 #include <SDL2/SDL.h>
 #include <vector>
 #include <map>
-#include <atomic>
 #include <thread>
-#include <mutex>
+#include <atomic>
 
 struct libevdev;
 
@@ -16,13 +15,11 @@ public:
     ~TouchHandler();
 
     bool init();
-    void processEvents();
+    void processEvents(std::vector<SDL_Event>& events);
     void setCalibration(int xOffset, int yOffset);
     void getCalibration(int& xOffset, int& yOffset) const;
-
     void startInputThread();
     void stopInputThread();
-    bool pollTouchEvent(SDL_Event& out);
 
 private:
     int screenW, screenH;
@@ -33,27 +30,17 @@ private:
     int pressureMax;
     int currentSlot = 0;
 
+    std::thread* inputThread = nullptr;
+    std::atomic<bool> inputThreadRunning{false};
+
+    // Map slot -> tracking ID (for active touches)
     std::map<int, int> slotToTrackingId;
+    // Map tracking ID -> current state (coordinates, pressure)
     struct SlotState { int x, y; float pressure; };
     std::map<int, SlotState> currentStates;
 
     void applyCalibration(int& x, int& y);
-    void enqueueTouchEvent(int type, int fingerId, int x, int y, float pressure);
-
-    static const int TOUCH_QUEUE_SIZE = 256;
-    struct TouchEvent {
-        int type;
-        int fingerId;
-        int x, y;
-        float pressure;
-        bool valid;
-    };
-    TouchEvent touchQueue[TOUCH_QUEUE_SIZE];
-    std::atomic<int> queueWrite{0};
-    std::atomic<int> queueRead{0};
-    std::atomic<bool> inputThreadRunning{false};
-    std::thread* inputThread = nullptr;
-    std::mutex queueMutex;
+    void generateTouchEvent(int type, int fingerId, int x, int y, float pressure, std::vector<SDL_Event>& events);
 };
 
 #endif

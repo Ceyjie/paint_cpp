@@ -201,6 +201,7 @@ private:
 
     bool showOverlay = false;
     std::string overlayType;
+    bool needsRender = true;
     std::vector<std::string> overlayFiles;
     int overlayScroll = 0;
     int selectedIndex = -1;
@@ -338,6 +339,7 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     if (!fontSmall) fontSmall = TTF_OpenFont("DejaVuSans.ttf", 20);
 
     touch.init();
+    touch.startInputThread();
     createToolbar();
 
     system("mkdir -p ~/pi-paint/drawings");
@@ -356,6 +358,7 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
 }
 
 PiPaint::~PiPaint() {
+    touch.stopInputThread();
     TTF_CloseFont(fontTiny);
     TTF_CloseFont(fontSmall);
     TTF_CloseFont(fontMedium);
@@ -570,6 +573,7 @@ void PiPaint::drawToolbar() {
 }
 
 void PiPaint::handleTouchDown(int fingerId, int x, int y) {
+    needsRender = true;
     lastTouchPos = {x, y};
     lastTapPos   = {x, y};
     lastTapTime  = SDL_GetTicks();
@@ -1639,24 +1643,20 @@ void PiPaint::run() {
         }
 
         Uint32 now = SDL_GetTicks();
-        if (now - lastRender < frameMs) {
-            SDL_Delay(1);
-            continue;
-        }
-        if (frameSkipCount > 0) {
-            frameSkipCount--;
+        if (needsRender || (now - lastRender) >= frameMs) {
             lastRender = now;
-            continue;
-        }
-        lastRender = now;
 
-        updateCanvasTexture();
-        SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, canvasTexture, nullptr, nullptr);
-        drawToolbar();
-        if (showOverlay) drawOverlay();
-        drawGhostShape();
-        SDL_RenderPresent(renderer);
+            updateCanvasTexture();
+            SDL_RenderClear(renderer);
+            SDL_RenderCopy(renderer, canvasTexture, nullptr, nullptr);
+            drawToolbar();
+            if (showOverlay) drawOverlay();
+            drawGhostShape();
+            SDL_RenderPresent(renderer);
+            needsRender = false;
+        } else {
+            SDL_Delay(1);
+        }
     }
 }
 
