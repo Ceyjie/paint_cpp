@@ -270,7 +270,12 @@ private:
 // ---------- PiPaint member function implementations ----------
 
 PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
+    setenv("SDL_VIDEODRIVER", "kmsdrm", 0);
+    setenv("SDL_FBDEV", "/dev/fb0", 0);
+    
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
     IMG_Init(IMG_INIT_PNG);
     TTF_Init();
 
@@ -296,7 +301,14 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     system("mkdir -p ~/pi-paint/drawings");
     currentBrowsePath = std::string(getenv("HOME")) + "/pi-paint/drawings";
 
-    tempFile = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+    tempFile = nullptr;
+    FILE* testFile = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+    if (testFile) {
+        tempFile = testFile;
+    } else {
+        testFile = fopen("/sys/class/thermal/thermal_zone1/temp", "r");
+        if (testFile) tempFile = testFile;
+    }
 
     canvas.clear();
 }

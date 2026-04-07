@@ -25,11 +25,17 @@ static std::string findTouchDevice() {
         if (libevdev_new_from_fd(fd, &dev) == 0) {
             const char* name = libevdev_get_name(dev);
             std::cout << "Found input device: " << name << " at " << path << std::endl;
-            if (name && (strstr(name, "Touch") || strstr(name, "p403") || strstr(name, "Virtual Ink"))) {
+            if (name && (strstr(name, "Touch") || strstr(name, "p403") || 
+                         strstr(name, "Virtual Ink") || strstr(name, "gt9") ||
+                         strstr(name, "touch") || strstr(name, " Touch"))) {
                 result = path;
                 libevdev_free(dev);
                 close(fd);
                 break;
+            }
+            // If no touch device found, accept first event device as fallback
+            if (result.empty()) {
+                result = path;
             }
             libevdev_free(dev);
         }
