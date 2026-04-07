@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <dirent.h>
 #include "drawingcanvas.h"
 #include "touchhandler.h"
 
@@ -271,6 +272,24 @@ private:
 // ---------- PiPaint member function implementations ----------
 
 PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
+    // Check for framebuffer
+    FILE* fb = fopen("/dev/fb0", "r");
+    if (fb) {
+        fclose(fb);
+        std::cout << "Framebuffer /dev/fb0 exists" << std::endl;
+    } else {
+        std::cout << "No framebuffer /dev/fb0" << std::endl;
+    }
+    
+    // Check for DRM device
+    DIR* dri = opendir("/dev/dri");
+    if (dri) {
+        std::cout << "DRM devices available" << std::endl;
+        closedir(dri);
+    } else {
+        std::cout << "No DRM devices" << std::endl;
+    }
+    
     const char* videoDrivers[] = {"kmsdrm", "fbdev", "directfb", nullptr};
     for (int i = 0; videoDrivers[i]; i++) {
         setenv("SDL_VIDEODRIVER", videoDrivers[i], 1);
@@ -291,14 +310,12 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     SDL_GetCurrentDisplayMode(0, &dm);
     width = dm.w;
     height = dm.h;
-    std::cout << "Display: " << width << "x" << height << std::endl;
     window = SDL_CreateWindow("Pi Paint", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                width, height, SDL_WINDOW_FULLSCREEN_DESKTOP);
     if (!window) {
         std::cerr << "Failed to create window: " << SDL_GetError() << std::endl;
         exit(1);
     }
-    std::cout << "Window created successfully" << std::endl;
     
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
@@ -310,9 +327,6 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     SDL_RendererInfo info;
     SDL_GetRendererInfo(renderer, &info);
     std::cout << "Renderer: " << info.name << std::endl;
-    
-    canvasTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
-    compositeSurface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
     
     canvasTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
     compositeSurface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
@@ -1637,17 +1651,12 @@ void PiPaint::run() {
         lastRender = now;
 
         updateCanvasTexture();
-        std::cout << "Rendering frame..." << std::endl;
         SDL_RenderClear(renderer);
-        std::cout << "Clear done" << std::endl;
         SDL_RenderCopy(renderer, canvasTexture, nullptr, nullptr);
-        std::cout << "Copy done" << std::endl;
         drawToolbar();
         if (showOverlay) drawOverlay();
         drawGhostShape();
-        std::cout << "Presenting..." << std::endl;
         SDL_RenderPresent(renderer);
-        std::cout << "Frame complete" << std::endl;
     }
 }
 
