@@ -27,7 +27,11 @@ static std::string findTouchDevice() {
             std::cout << "Found input device: " << name << " at " << path << std::endl;
             if (name && (strstr(name, "Touch") || strstr(name, "p403") || 
                          strstr(name, "Virtual Ink") || strstr(name, "gt9") ||
-                         strstr(name, "touch") || strstr(name, " Touch"))) {
+                         strstr(name, "touch") || strstr(name, " Touch") ||
+                         strstr(name, "IR") || strstr(name, "ir") ||
+                         strstr(name, "infrared") || strstr(name, "IRTouch") ||
+                         strstr(name, "TouchScreen") || strstr(name, "eGalax") ||
+                         strstr(name, "TouchKit") || strstr(name, "wave"))) {
                 result = path;
                 libevdev_free(dev);
                 close(fd);
