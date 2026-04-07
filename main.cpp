@@ -291,12 +291,14 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     SDL_GetCurrentDisplayMode(0, &dm);
     width = dm.w;
     height = dm.h;
+    std::cout << "Display: " << width << "x" << height << std::endl;
     window = SDL_CreateWindow("Pi Paint", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                width, height, SDL_WINDOW_FULLSCREEN_DESKTOP);
     if (!window) {
         std::cerr << "Failed to create window: " << SDL_GetError() << std::endl;
         exit(1);
     }
+    std::cout << "Window created successfully" << std::endl;
     
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
@@ -1635,13 +1637,17 @@ void PiPaint::run() {
         lastRender = now;
 
         updateCanvasTexture();
+        std::cout << "Rendering frame..." << std::endl;
         SDL_RenderClear(renderer);
+        std::cout << "Clear done" << std::endl;
         SDL_RenderCopy(renderer, canvasTexture, nullptr, nullptr);
+        std::cout << "Copy done" << std::endl;
         drawToolbar();
         if (showOverlay) drawOverlay();
         drawGhostShape();
-
+        std::cout << "Presenting..." << std::endl;
         SDL_RenderPresent(renderer);
+        std::cout << "Frame complete" << std::endl;
     }
 }
 
