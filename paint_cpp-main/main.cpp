@@ -178,7 +178,6 @@ private:
     SDL_Window* window;
     SDL_Renderer* renderer;
     SDL_Texture* canvasTexture;
-    SDL_Surface* compositeSurface = nullptr;
     TTF_Font* fontTiny;
     TTF_Font* fontSmall;
     TTF_Font* fontMedium;
@@ -220,16 +219,19 @@ private:
     SDL_Point lastTouchPos = {-1, -1};
     SDL_Point lastTapPos   = {-1, -1};
     Uint32    lastTapTime  = 0;
-    FILE*     tempFile    = nullptr;
+    bool multiTouchMode = false;
+
+    SDL_Surface* compositeSurface = nullptr;
+    bool needsRender = true;
 
     // Color wheel
-    SDL_Texture* svSquareTexture = nullptr;
-    SDL_Texture* hueSliderTexture = nullptr;
+    SDL_Texture* colorWheelTexture = nullptr;
     int wheelTexW = 0, wheelTexH = 0;
     float currentHue = 0.0f, currentSat = 1.0f, currentVal = 1.0f;
     void generateColorWheelTexture();
     void showColorWheel();
     void drawColorWheelOverlay();
+    bool handleColorWheelClick(int x, int y);
 
     void createToolbar();
     void updateCanvasTexture();
@@ -271,19 +273,7 @@ private:
 // ---------- PiPaint member function implementations ----------
 
 PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
-    const char* videoDrivers[] = {"kmsdrm", "fbdev", "directfb", nullptr};
-    for (int i = 0; videoDrivers[i]; i++) {
-        setenv("SDL_VIDEODRIVER", videoDrivers[i], 1);
-        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
-            SDL_DisplayMode dm;
-            if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
-                std::cout << "Using video driver: " << videoDrivers[i] << std::endl;
-                break;
-            }
-            SDL_Quit();
-        }
-    }
-    
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     IMG_Init(IMG_INIT_PNG);
     TTF_Init();
 
@@ -293,25 +283,8 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     height = dm.h;
     window = SDL_CreateWindow("Pi Paint", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                width, height, SDL_WINDOW_FULLSCREEN_DESKTOP);
-    if (!window) {
-        std::cerr << "Failed to create window: " << SDL_GetError() << std::endl;
-        exit(1);
-    }
-    
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-    if (!renderer) {
-        std::cerr << "Failed to create renderer: " << SDL_GetError() << std::endl;
-        exit(1);
-    }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_RendererInfo info;
-    SDL_GetRendererInfo(renderer, &info);
-    std::cout << "Renderer: " << info.name << std::endl;
-    
-    canvasTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
-    compositeSurface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
-    
     canvasTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
     compositeSurface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
     fontTiny   = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13);
@@ -322,24 +295,18 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     if (!fontSmall) fontSmall = TTF_OpenFont("DejaVuSans.ttf", 20);
 
     touch.init();
+    touch.startInputThread();
     createToolbar();
 
     system("mkdir -p ~/pi-paint/drawings");
     currentBrowsePath = std::string(getenv("HOME")) + "/pi-paint/drawings";
 
-    tempFile = nullptr;
-    FILE* testFile = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
-    if (testFile) {
-        tempFile = testFile;
-    } else {
-        testFile = fopen("/sys/class/thermal/thermal_zone1/temp", "r");
-        if (testFile) tempFile = testFile;
-    }
-
     canvas.clear();
+    needsRender = true;
 }
 
 PiPaint::~PiPaint() {
+    touch.stopInputThread();
     TTF_CloseFont(fontTiny);
     TTF_CloseFont(fontSmall);
     TTF_CloseFont(fontMedium);
@@ -348,9 +315,7 @@ PiPaint::~PiPaint() {
     SDL_FreeSurface(compositeSurface);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
-    if (svSquareTexture) SDL_DestroyTexture(svSquareTexture);
-    if (hueSliderTexture) SDL_DestroyTexture(hueSliderTexture);
-    if (tempFile) fclose(tempFile);
+    if (colorWheelTexture) SDL_DestroyTexture(colorWheelTexture);
     TTF_Quit();
     IMG_Quit();
     SDL_Quit();
@@ -377,6 +342,22 @@ void PiPaint::createToolbar() {
     wheelBtn.type = "color_wheel";
     toolbarButtons.push_back(wheelBtn);
     x += colorSize + margin;
+
+    int touchBtnW = 55, touchBtnH = 35;
+    margin = 4;
+    y = (toolbarHeight - touchBtnH) / 2;
+    
+    Button singleTouchBtn;
+    singleTouchBtn.rect = {x, y, touchBtnW, touchBtnH};
+    singleTouchBtn.type = "single_touch";
+    toolbarButtons.push_back(singleTouchBtn);
+    x += touchBtnW + margin;
+    
+    Button multiTouchBtn;
+    multiTouchBtn.rect = {x, y, touchBtnW, touchBtnH};
+    multiTouchBtn.type = "multi_touch";
+    toolbarButtons.push_back(multiTouchBtn);
+    x += touchBtnW + margin + 10;
 
     int btnW = 60, btnH = 35;
     margin = 6;
@@ -426,12 +407,11 @@ void PiPaint::createToolbar() {
 }
 
 void PiPaint::updateCanvasTexture() {
-    SDL_Surface* composite = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (composite) {
-        canvas.compositeToSurface(composite);
-        SDL_UpdateTexture(canvasTexture, nullptr, composite->pixels, composite->pitch);
-        SDL_FreeSurface(composite);
+    if (compositeSurface) {
+        canvas.compositeToSurface(compositeSurface);
+        SDL_UpdateTexture(canvasTexture, nullptr, compositeSurface->pixels, compositeSurface->pitch);
     }
+    canvas.clearDirtyRect();
 }
 
 void PiPaint::drawToolbar() {
@@ -514,6 +494,36 @@ void PiPaint::drawToolbar() {
             SDL_RenderDrawLine(renderer, btn.rect.x+10, btn.rect.y+btn.rect.h/2,
                                btn.rect.x+btn.rect.w-10, btn.rect.y+btn.rect.h/2);
             hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+        } else if (btn.type == "single_touch") {
+            Uint32 bg = multiTouchMode ? COLOR_LIGHT_GRAY : _rgb(70, 180, 70);
+            SDL_SetRenderDrawColor(renderer, (bg>>16)&0xFF, (bg>>8)&0xFF, bg&0xFF, 255);
+            SDL_RenderFillRect(renderer, &btn.rect);
+            SDL_SetRenderDrawColor(renderer, 44,44,46,255);
+            SDL_RenderDrawRect(renderer, &btn.rect);
+            hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+            SDL_Surface* surf = TTF_RenderUTF8_Blended(fontTiny, "1Touch", {255,255,255,0});
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+            SDL_Rect dst = {btn.rect.x + (btn.rect.w - surf->w)/2,
+                            btn.rect.y + (btn.rect.h - surf->h)/2,
+                            surf->w, surf->h};
+            SDL_RenderCopy(renderer, tex, nullptr, &dst);
+            SDL_FreeSurface(surf);
+            SDL_DestroyTexture(tex);
+        } else if (btn.type == "multi_touch") {
+            Uint32 bg = multiTouchMode ? _rgb(70, 140, 220) : COLOR_LIGHT_GRAY;
+            SDL_SetRenderDrawColor(renderer, (bg>>16)&0xFF, (bg>>8)&0xFF, bg&0xFF, 255);
+            SDL_RenderFillRect(renderer, &btn.rect);
+            SDL_SetRenderDrawColor(renderer, 44,44,46,255);
+            SDL_RenderDrawRect(renderer, &btn.rect);
+            hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+            SDL_Surface* surf = TTF_RenderUTF8_Blended(fontTiny, "MTouch", {255,255,255,0});
+            SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+            SDL_Rect dst = {btn.rect.x + (btn.rect.w - surf->w)/2,
+                            btn.rect.y + (btn.rect.h - surf->h)/2,
+                            surf->w, surf->h};
+            SDL_RenderCopy(renderer, tex, nullptr, &dst);
+            SDL_FreeSurface(surf);
+            SDL_DestroyTexture(tex);
         } else {
             const char* label = "";
             if (btn.type == "eraser") label = "Eraser";
@@ -558,48 +568,21 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
     lastTapPos   = {x, y};
     lastTapTime  = SDL_GetTicks();
 
+    if (!multiTouchMode) {
+        if (!activeFingers.empty()) {
+            int oldId = *activeFingers.begin();
+            canvas.endStroke(oldId);
+            activeFingers.erase(oldId);
+            activeFingerPos.erase(oldId);
+        }
+        activeFingers.clear();
+        activeFingerPos.clear();
+        fingerId = 0;
+    }
+
     if (showOverlay) {
         if (overlayType == "color_wheel") {
-            int svSize = 320;
-            int hueW = 40;
-            int btnW = 100, btnH = 48;
-            int totalW = svSize + hueW + 60;
-            int totalH = svSize + 80;
-            int panelX = (width - totalW) / 2;
-            int panelY = (height - totalH) / 2;
-
-            if (x >= panelX && x <= panelX + svSize && y >= panelY && y <= panelY + svSize) {
-                currentSat = (float)(x - panelX) / svSize;
-                currentVal = 1.0f - (float)(y - panelY) / svSize;
-                if (currentSat < 0) currentSat = 0;
-                if (currentSat > 1) currentSat = 1;
-                if (currentVal < 0) currentVal = 0;
-                if (currentVal > 1) currentVal = 1;
-                Uint8 r, g, b;
-                hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
-                canvas.setColor(r, g, b);
-                generateColorWheelTexture();
-                return;
-            }
-
-            int hueX = panelX + svSize + 20;
-            if (x >= hueX && x <= hueX + hueW && y >= panelY && y <= panelY + svSize) {
-                currentHue = 1.0f - (float)(y - panelY) / svSize;
-                if (currentHue < 0) currentHue = 0;
-                if (currentHue > 1) currentHue = 1;
-                Uint8 r, g, b;
-                hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
-                canvas.setColor(r, g, b);
-                generateColorWheelTexture();
-                return;
-            }
-
-            int btnX = panelX + (totalW - btnW) / 2;
-            int btnY = panelY + svSize + 20 + 40 + 15;
-            if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
-                showOverlay = false;
-                return;
-            }
+            if (handleColorWheelClick(x, y)) return;
             return;
         }
 
@@ -760,6 +743,8 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
 }
 
 void PiPaint::handleTouchMove(int fingerId, int x, int y) {
+    if (!multiTouchMode) fingerId = 0;
+    
     lastTouchPos = {x, y};
     activeFingerPos[fingerId] = {x, y};
 
@@ -774,6 +759,8 @@ void PiPaint::handleTouchMove(int fingerId, int x, int y) {
 }
 
 void PiPaint::handleTouchUp(int fingerId) {
+    if (!multiTouchMode) fingerId = 0;
+    
     activeFingers.erase(fingerId);
     activeFingerPos.erase(fingerId);
     if (activeFingers.empty()) lastTouchPos = {-1, -1};
@@ -886,10 +873,8 @@ void PiPaint::handleKeyboard(SDL_KeyboardEvent& ev) {
             newCanvas();
         } else if (ev.keysym.sym == SDLK_z && (ev.keysym.mod & KMOD_CTRL)) {
             canvas.undo();
-            updateCanvasTexture();
         } else if (ev.keysym.sym == SDLK_y && (ev.keysym.mod & KMOD_CTRL)) {
             canvas.redo();
-            updateCanvasTexture();
         } else if (ev.keysym.sym == SDLK_s && (ev.keysym.mod & KMOD_CTRL)) {
             showSaveOverlay();
         } else if (ev.keysym.sym == SDLK_o && (ev.keysym.mod & KMOD_CTRL)) {
@@ -943,10 +928,10 @@ void PiPaint::executeToolAction(const std::string& type, int index) {
         canvas.toggleBackground();
     } else if (type == "undo") {
         canvas.undo();
-        updateCanvasTexture();
+        needsRender = true;
     } else if (type == "redo") {
         canvas.redo();
-        updateCanvasTexture();
+        needsRender = true;
     } else if (type == "clear") {
         canvas.clear();
     } else if (type == "new") {
@@ -961,6 +946,10 @@ void PiPaint::executeToolAction(const std::string& type, int index) {
     } else if (type == "size_down") {
         penSize = std::max(1, penSize - 1);
         canvas.setSize(penSize);
+    } else if (type == "single_touch") {
+        multiTouchMode = false;
+    } else if (type == "multi_touch") {
+        multiTouchMode = true;
     }
 }
 
@@ -980,99 +969,171 @@ void PiPaint::showColorWheel() {
     Uint8 g = (col >> 8) & 0xFF;
     Uint8 b = col & 0xFF;
     rgbToHsv(r, g, b, currentHue, currentSat, currentVal);
-    if (svSquareTexture == nullptr) generateColorWheelTexture();
+    if (colorWheelTexture == nullptr) generateColorWheelTexture();
 }
 
 void PiPaint::generateColorWheelTexture() {
-    if (svSquareTexture) SDL_DestroyTexture(svSquareTexture);
-    if (hueSliderTexture) SDL_DestroyTexture(hueSliderTexture);
+    if (colorWheelTexture) SDL_DestroyTexture(colorWheelTexture);
+    int size = 320;
+    wheelTexW = wheelTexH = size;
+    SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!surf) return;
     
-    int svSize = 320;
-    int hueW = 40;
-    wheelTexW = svSize + hueW;
-    wheelTexH = svSize;
-    
-    SDL_Surface* svSurf = SDL_CreateRGBSurfaceWithFormat(0, svSize, svSize, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (!svSurf) return;
-    
-    for (int y = 0; y < svSize; y++) {
-        for (int x = 0; x < svSize; x++) {
-            float sat = (float)x / svSize;
-            float val = 1.0f - (float)y / svSize;
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            float sat = (float)x / size;
+            float val = 1.0f - (float)y / size;
             Uint8 rr, gg, bb;
             hsvToRgb(currentHue, sat, val, rr, gg, bb);
-            ((Uint32*)svSurf->pixels)[y * svSize + x] = SDL_MapRGB(svSurf->format, rr, gg, bb);
+            ((Uint32*)surf->pixels)[y*size + x] = SDL_MapRGBA(surf->format, rr, gg, bb, 255);
         }
     }
-    svSquareTexture = SDL_CreateTextureFromSurface(renderer, svSurf);
-    SDL_FreeSurface(svSurf);
-    
-    SDL_Surface* hueSurf = SDL_CreateRGBSurfaceWithFormat(0, hueW, svSize, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (!hueSurf) return;
-    
-    for (int y = 0; y < svSize; y++) {
-        float hue = 1.0f - (float)y / svSize;
-        Uint8 rr, gg, bb;
-        hsvToRgb(hue, 1.0f, 1.0f, rr, gg, bb);
-        for (int x = 0; x < hueW; x++) {
-            ((Uint32*)hueSurf->pixels)[y * hueW + x] = SDL_MapRGB(hueSurf->format, rr, gg, bb);
-        }
-    }
-    hueSliderTexture = SDL_CreateTextureFromSurface(renderer, hueSurf);
-    SDL_FreeSurface(hueSurf);
+    colorWheelTexture = SDL_CreateTextureFromSurface(renderer, surf);
+    SDL_FreeSurface(surf);
 }
 
 void PiPaint::drawColorWheelOverlay() {
-    int svSize = 320;
-    int hueW = 40;
-    int previewW = 80, previewH = 40;
-    int btnW = 100, btnH = 48;
-    int totalW = svSize + hueW + 60;
-    int totalH = svSize + 80;
-    int panelX = (width - totalW) / 2;
-    int panelY = (height - totalH) / 2;
+    const int MARGIN = 30;
+    const int hueH = 30;
+    const int pickerSize = 280;
+    const int previewH = 40;
+    const int panelW = pickerSize + MARGIN * 2;
+    const int panelH = 40 + hueH + 10 + pickerSize + 10 + previewH + 50;
+    const int panelX = (width - panelW) / 2;
+    const int panelY = (height - panelH) / 2;
 
-    SDL_Rect svRect = {panelX, panelY, svSize, svSize};
-    SDL_RenderCopy(renderer, svSquareTexture, nullptr, &svRect);
-    SDL_SetRenderDrawColor(renderer, 44, 44, 46, 255);
-    SDL_RenderDrawRect(renderer, &svRect);
+    SDL_SetRenderDrawColor(renderer, 250, 250, 255, 255);
+    SDL_Rect panel = {panelX, panelY, panelW, panelH};
+    SDL_RenderFillRect(renderer, &panel);
+    SDL_SetRenderDrawColor(renderer, 180, 180, 185, 255);
+    SDL_RenderDrawRect(renderer, &panel);
 
-    int hueX = panelX + svSize + 20;
-    SDL_Rect hueRect = {hueX, panelY, hueW, svSize};
-    SDL_RenderCopy(renderer, hueSliderTexture, nullptr, &hueRect);
+    int contentX = panelX + MARGIN;
+    int titleY = panelY + 15;
+    renderText(renderer, fontMedium, "Color", {44, 44, 46, 255}, contentX, titleY);
+
+    int hueY = panelY + 50;
+    SDL_Rect hueRect = {contentX, hueY, pickerSize, hueH};
+    for (int i = 0; i < pickerSize; i++) {
+        float hue = (float)i / pickerSize;
+        Uint8 r, g, b;
+        hsvToRgb(hue, 1.0f, 1.0f, r, g, b);
+        SDL_SetRenderDrawColor(renderer, r, g, b, 255);
+        SDL_RenderDrawLine(renderer, contentX + i, hueY, contentX + i, hueY + hueH);
+    }
+    SDL_SetRenderDrawColor(renderer, 100, 100, 105, 255);
     SDL_RenderDrawRect(renderer, &hueRect);
 
-    int markerY = panelY + (int)((1.0f - currentHue) * svSize);
+    int hueMarkerX = contentX + currentHue * pickerSize;
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    SDL_RenderDrawLine(renderer, hueX - 5, markerY, hueX + hueW + 5, markerY);
+    SDL_RenderDrawLine(renderer, hueMarkerX, hueY - 2, hueMarkerX, hueY + hueH + 2);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderDrawLine(renderer, hueX - 7, markerY, hueX + hueW + 7, markerY);
+    SDL_RenderDrawLine(renderer, hueMarkerX - 1, hueY - 2, hueMarkerX - 1, hueY + hueH + 2);
+    SDL_RenderDrawLine(renderer, hueMarkerX + 1, hueY - 2, hueMarkerX + 1, hueY + hueH + 2);
 
-    int svX = panelX + (int)(currentSat * svSize);
-    int svY = panelY + (int)((1.0f - currentVal) * svSize);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    SDL_RenderDrawLine(renderer, svX - 6, svY, svX + 6, svY);
-    SDL_RenderDrawLine(renderer, svX, svY - 6, svX, svY + 6);
+    generateColorWheelTexture();
+    int pickerY = hueY + hueH + 10;
+    SDL_Rect pickerRect = {contentX, pickerY, pickerSize, pickerSize};
+    SDL_RenderCopy(renderer, colorWheelTexture, nullptr, &pickerRect);
+    SDL_SetRenderDrawColor(renderer, 100, 100, 105, 255);
+    SDL_RenderDrawRect(renderer, &pickerRect);
+
+    int markerX = contentX + currentSat * pickerSize;
+    int markerY = pickerY + (1.0f - currentVal) * pickerSize;
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderDrawLine(renderer, svX - 8, svY, svX + 8, svY);
-    SDL_RenderDrawLine(renderer, svX, svY - 8, svX, svY + 8);
+    SDL_Rect marker = {markerX - 5, markerY - 5, 10, 10};
+    SDL_RenderDrawRect(renderer, &marker);
 
-    Uint8 pr, pg, pb;
-    hsvToRgb(currentHue, currentSat, currentVal, pr, pg, pb);
-    SDL_Rect preview = {panelX + (svSize - previewW) / 2, panelY + svSize + 20, previewW, previewH};
-    SDL_SetRenderDrawColor(renderer, pr, pg, pb, 255);
-    SDL_RenderFillRect(renderer, &preview);
-    SDL_SetRenderDrawColor(renderer, 44, 44, 46, 255);
-    SDL_RenderDrawRect(renderer, &preview);
+    int previewY = pickerY + pickerSize + 10;
+    Uint8 cr, cg, cb;
+    hsvToRgb(currentHue, currentSat, currentVal, cr, cg, cb);
+    
+    SDL_Rect currentPrev = {contentX, previewY, 60, 25};
+    SDL_SetRenderDrawColor(renderer, cr, cg, cb, 255);
+    SDL_RenderFillRect(renderer, &currentPrev);
+    SDL_SetRenderDrawColor(renderer, 150, 150, 155, 255);
+    SDL_RenderDrawRect(renderer, &currentPrev);
 
-    int btnX = panelX + (totalW - btnW) / 2;
-    int btnY = panelY + svSize + 20 + previewH + 15;
-    SDL_SetRenderDrawColor(renderer, 232, 232, 236, 255);
-    SDL_Rect closeBtn = {btnX, btnY, btnW, btnH};
-    SDL_RenderFillRect(renderer, &closeBtn);
-    SDL_SetRenderDrawColor(renderer, 180, 180, 185, 255);
-    SDL_RenderDrawRect(renderer, &closeBtn);
-    renderText(renderer, fontSmall, "Close", {44, 44, 46, 255}, btnX + 30, btnY + 12);
+    char rgbText[32];
+    snprintf(rgbText, sizeof(rgbText), "R:%d G:%d B:%d", cr, cg, cb);
+    renderText(renderer, fontSmall, rgbText, {60, 60, 65, 255}, contentX + 70, previewY + 5);
+
+    int btnW = 100, btnH = 40;
+    int btnY = previewY + 35;
+    int btnGap = 20;
+    int cancelX = panelX + MARGIN;
+    int okX = panelX + panelW - MARGIN - btnW;
+
+    SDL_SetRenderDrawColor(renderer, 210, 210, 215, 255);
+    SDL_Rect cancelBtn = {cancelX, btnY, btnW, btnH};
+    SDL_RenderFillRect(renderer, &cancelBtn);
+    SDL_SetRenderDrawColor(renderer, 160, 160, 165, 255);
+    SDL_RenderDrawRect(renderer, &cancelBtn);
+    hoverHighlight(renderer, cancelBtn, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+    renderText(renderer, fontSmall, "Cancel", {60, 60, 65, 255}, cancelX + 28, btnY + 10);
+
+    SDL_SetRenderDrawColor(renderer, 0, 180, 100, 255);
+    SDL_Rect okBtn = {okX, btnY, btnW, btnH};
+    SDL_RenderFillRect(renderer, &okBtn);
+    SDL_SetRenderDrawColor(renderer, 0, 140, 80, 255);
+    SDL_RenderDrawRect(renderer, &okBtn);
+    hoverHighlight(renderer, okBtn, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+    renderText(renderer, fontSmall, "OK", {255, 255, 255, 255}, okX + 40, btnY + 10);
+}
+
+bool PiPaint::handleColorWheelClick(int x, int y) {
+    const int MARGIN = 30;
+    const int hueH = 30;
+    const int pickerSize = 280;
+    const int previewH = 40;
+    const int panelW = pickerSize + MARGIN * 2;
+    const int panelH = 40 + hueH + 10 + pickerSize + 10 + previewH + 50;
+    const int panelX = (width - panelW) / 2;
+    const int panelY = (height - panelH) / 2;
+
+    if (x < panelX || x > panelX + panelW || y < panelY || y > panelY + panelH) return false;
+
+    int contentX = panelX + MARGIN;
+    int hueY = panelY + 50;
+
+    if (y >= hueY && y <= hueY + hueH && x >= contentX && x <= contentX + pickerSize) {
+        currentHue = (float)(x - contentX) / pickerSize;
+        currentHue = std::max(0.0f, std::min(1.0f, currentHue));
+        Uint8 r, g, b;
+        hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
+        canvas.setColor(r, g, b);
+        return true;
+    }
+
+    int pickerY = hueY + hueH + 10;
+    if (y >= pickerY && y <= pickerY + pickerSize && x >= contentX && x <= contentX + pickerSize) {
+        currentSat = (float)(x - contentX) / pickerSize;
+        currentVal = 1.0f - (float)(y - pickerY) / pickerSize;
+        currentSat = std::max(0.0f, std::min(1.0f, currentSat));
+        currentVal = std::max(0.0f, std::min(1.0f, currentVal));
+        Uint8 r, g, b;
+        hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
+        canvas.setColor(r, g, b);
+        return true;
+    }
+
+    int previewY = pickerY + pickerSize + 10;
+    int btnW = 100, btnH = 40;
+    int btnY = previewY + 35;
+    int cancelX = panelX + MARGIN;
+    int okX = panelX + panelW - MARGIN - btnW;
+
+    if (x >= cancelX && x <= cancelX + btnW && y >= btnY && y <= btnY + btnH) {
+        showOverlay = false;
+        return true;
+    }
+
+    if (x >= okX && x <= okX + btnW && y >= btnY && y <= btnY + btnH) {
+        showOverlay = false;
+        return true;
+    }
+
+    return false;
 }
 
 // ---------- file list helpers ----------
@@ -1566,38 +1627,39 @@ void PiPaint::drawOverlay() {
 void PiPaint::run() {
     SDL_ShowCursor(SDL_ENABLE);
     SDL_Event e;
-    const Uint32 BASE_FRAME_MS = 16;
-    Uint32 frameMs = BASE_FRAME_MS;
-    Uint32 lastRender = SDL_GetTicks();
-    int frameSkipCount = 0;
+    const Uint32 FRAME_MS = 16;
+    Uint32 lastRender = 0;
 
     while (true) {
-        std::vector<SDL_Event> touchEvents;
-        touch.processEvents(touchEvents);
-        for (auto& ev : touchEvents) {
-            if (ev.type == SDL_FINGERDOWN) {
-                int x = (int)(ev.tfinger.x * width);
-                int y = (int)(ev.tfinger.y * height);
-                if (ev.tfinger.pressure > 0.0f && ev.tfinger.pressure != 0.5f) {
-                    int pressureSize = std::max(1, (int)(ev.tfinger.pressure * penSize * 2.0f));
+        while (touch.pollTouchEvent(e)) {
+            needsRender = true;
+            if (e.type == SDL_FINGERDOWN) {
+                int x = (int)(e.tfinger.x * width);
+                int y = (int)(e.tfinger.y * height);
+                canvas.setPressure(e.tfinger.pressure);
+                if (e.tfinger.pressure > 0.0f && e.tfinger.pressure != 0.5f) {
+                    int pressureSize = std::max(1, (int)(e.tfinger.pressure * penSize * 2.0f));
                     canvas.setSize(std::min(pressureSize, 50));
                 }
-                handleTouchDown(ev.tfinger.fingerId, x, y);
-            } else if (ev.type == SDL_FINGERMOTION) {
-                int x = (int)(ev.tfinger.x * width);
-                int y = (int)(ev.tfinger.y * height);
-                if (ev.tfinger.pressure > 0.0f && ev.tfinger.pressure != 0.5f) {
-                    int pressureSize = std::max(1, (int)(ev.tfinger.pressure * penSize * 2.0f));
+                handleTouchDown(e.tfinger.fingerId, x, y);
+            } else if (e.type == SDL_FINGERMOTION) {
+                int x = (int)(e.tfinger.x * width);
+                int y = (int)(e.tfinger.y * height);
+                canvas.setPressure(e.tfinger.pressure);
+                if (e.tfinger.pressure > 0.0f && e.tfinger.pressure != 0.5f) {
+                    int pressureSize = std::max(1, (int)(e.tfinger.pressure * penSize * 2.0f));
                     canvas.setSize(std::min(pressureSize, 50));
                 }
-                handleTouchMove(ev.tfinger.fingerId, x, y);
-            } else if (ev.type == SDL_FINGERUP) {
+                handleTouchMove(e.tfinger.fingerId, x, y);
+            } else if (e.type == SDL_FINGERUP) {
                 canvas.setSize(penSize);
-                handleTouchUp(ev.tfinger.fingerId);
+                canvas.setPressure(1.0f);
+                handleTouchUp(e.tfinger.fingerId);
             }
         }
 
         while (SDL_PollEvent(&e)) {
+            needsRender = true;
             if (e.type == SDL_QUIT) return;
             else if (e.type == SDL_MOUSEBUTTONDOWN) handleMouseButtonDown(e.button);
             else if (e.type == SDL_MOUSEMOTION)     handleMouseMotion(e.motion);
@@ -1605,43 +1667,20 @@ void PiPaint::run() {
             else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) handleKeyboard(e.key);
         }
 
-        if (tempFile) {
-            rewind(tempFile);
-            int temp = 0;
-            if (fscanf(tempFile, "%d", &temp) == 1) {
-                if (temp > 65000) {
-                    frameMs = 33;
-                    frameSkipCount = 2;
-                } else if (temp > 55000) {
-                    frameMs = 20;
-                    frameSkipCount = 1;
-                } else {
-                    frameMs = BASE_FRAME_MS;
-                    frameSkipCount = 0;
-                }
-            }
-        }
-
         Uint32 now = SDL_GetTicks();
-        if (now - lastRender < frameMs) {
-            SDL_Delay(1);
-            continue;
-        }
-        if (frameSkipCount > 0) {
-            frameSkipCount--;
+        if (needsRender || (now - lastRender) >= FRAME_MS) {
             lastRender = now;
-            continue;
+
+            updateCanvasTexture();
+            SDL_RenderClear(renderer);
+            SDL_RenderCopy(renderer, canvasTexture, nullptr, nullptr);
+            drawToolbar();
+            if (showOverlay) drawOverlay();
+            drawGhostShape();
+
+            SDL_RenderPresent(renderer);
+            needsRender = false;
         }
-        lastRender = now;
-
-        updateCanvasTexture();
-        SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, canvasTexture, nullptr, nullptr);
-        drawToolbar();
-        if (showOverlay) drawOverlay();
-        drawGhostShape();
-
-        SDL_RenderPresent(renderer);
     }
 }
 

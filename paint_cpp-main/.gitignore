@@ -1,0 +1,13 @@
+# Build artifacts
+pipaint
+*.o
+*.a
+*.so
+
+# Test files
+test_smoothing
+test_smoothing.cpp
+
+# Generated images
+*.png
+!splash.png
