@@ -27,7 +27,11 @@ static std::string findTouchDevice() {
             std::cout << "Found input device: " << name << " at " << path << std::endl;
             if (name && (strstr(name, "Touch") || strstr(name, "p403") || 
                          strstr(name, "Virtual Ink") || strstr(name, "gt9") ||
-                         strstr(name, "touch") || strstr(name, " Touch"))) {
+                         strstr(name, "touch") || strstr(name, " Touch") ||
+                         strstr(name, "IR") || strstr(name, "ir") ||
+                         strstr(name, "infrared") || strstr(name, "IRTouch") ||
+                         strstr(name, "TouchScreen") || strstr(name, "eGalax") ||
+                         strstr(name, "TouchKit") || strstr(name, "wave"))) {
                 result = path;
                 libevdev_free(dev);
                 close(fd);
@@ -235,30 +239,4 @@ void TouchHandler::setCalibration(int xOffset, int yOffset) {
 void TouchHandler::getCalibration(int& xOffset, int& yOffset) const {
     xOffset = calibrationX;
     yOffset = calibrationY;
-}
-
-void TouchHandler::startInputThread() {
-    if (inputThread) return;
-    inputThreadRunning.store(true);
-    inputThread = new std::thread([this]() {
-        std::cout << "Touch input thread started" << std::endl;
-        std::vector<SDL_Event> events;
-        while (inputThreadRunning.load()) {
-            processEvents(events);
-            if (!events.empty()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            }
-        }
-        std::cout << "Touch input thread stopped" << std::endl;
-    });
-}
-
-void TouchHandler::stopInputThread() {
-    if (!inputThread) return;
-    inputThreadRunning.store(false);
-    if (inputThread->joinable()) {
-        inputThread->join();
-    }
-    delete inputThread;
-    inputThread = nullptr;
 }

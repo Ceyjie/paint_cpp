@@ -240,29 +240,3 @@ void TouchHandler::getCalibration(int& xOffset, int& yOffset) const {
     xOffset = calibrationX;
     yOffset = calibrationY;
 }
-
-void TouchHandler::startInputThread() {
-    if (inputThread) return;
-    inputThreadRunning.store(true);
-    inputThread = new std::thread([this]() {
-        std::cout << "Touch input thread started" << std::endl;
-        std::vector<SDL_Event> events;
-        while (inputThreadRunning.load()) {
-            processEvents(events);
-            if (!events.empty()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            }
-        }
-        std::cout << "Touch input thread stopped" << std::endl;
-    });
-}
-
-void TouchHandler::stopInputThread() {
-    if (!inputThread) return;
-    inputThreadRunning.store(false);
-    if (inputThread->joinable()) {
-        inputThread->join();
-    }
-    delete inputThread;
-    inputThread = nullptr;
-}

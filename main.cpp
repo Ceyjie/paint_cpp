@@ -339,7 +339,6 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     if (!fontSmall) fontSmall = TTF_OpenFont("DejaVuSans.ttf", 20);
 
     touch.init();
-    touch.startInputThread();
     createToolbar();
 
     system("mkdir -p ~/pi-paint/drawings");
@@ -358,7 +357,6 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
 }
 
 PiPaint::~PiPaint() {
-    touch.stopInputThread();
     TTF_CloseFont(fontTiny);
     TTF_CloseFont(fontSmall);
     TTF_CloseFont(fontMedium);

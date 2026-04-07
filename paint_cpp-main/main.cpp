@@ -339,7 +339,6 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     if (!fontSmall) fontSmall = TTF_OpenFont("DejaVuSans.ttf", 20);
 
     touch.init();
-    touch.startInputThread();
     createToolbar();
 
     system("mkdir -p ~/pi-paint/drawings");
@@ -358,7 +357,6 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
 }
 
 PiPaint::~PiPaint() {
-    touch.stopInputThread();
     TTF_CloseFont(fontTiny);
     TTF_CloseFont(fontSmall);
     TTF_CloseFont(fontMedium);
@@ -780,6 +778,7 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
 }
 
 void PiPaint::handleTouchMove(int fingerId, int x, int y) {
+    needsRender = true;
     lastTouchPos = {x, y};
     activeFingerPos[fingerId] = {x, y};
 
@@ -794,6 +793,7 @@ void PiPaint::handleTouchMove(int fingerId, int x, int y) {
 }
 
 void PiPaint::handleTouchUp(int fingerId) {
+    needsRender = true;
     activeFingers.erase(fingerId);
     activeFingerPos.erase(fingerId);
     if (activeFingers.empty()) lastTouchPos = {-1, -1};
@@ -961,14 +961,18 @@ void PiPaint::executeToolAction(const std::string& type, int index) {
         if (canvas.isEraserMode()) canvas.toggleEraser();
     } else if (type == "bg") {
         canvas.toggleBackground();
+        needsRender = true;
     } else if (type == "undo") {
         canvas.undo();
         updateCanvasTexture();
+        needsRender = true;
     } else if (type == "redo") {
         canvas.redo();
         updateCanvasTexture();
+        needsRender = true;
     } else if (type == "clear") {
         canvas.clear();
+        needsRender = true;
     } else if (type == "new") {
         newCanvas();
     } else if (type == "save") {

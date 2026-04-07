@@ -4,7 +4,6 @@
 #include <SDL2/SDL.h>
 #include <vector>
 #include <map>
-#include <thread>
 #include <atomic>
 
 struct libevdev;
@@ -18,8 +17,6 @@ public:
     void processEvents(std::vector<SDL_Event>& events);
     void setCalibration(int xOffset, int yOffset);
     void getCalibration(int& xOffset, int& yOffset) const;
-    void startInputThread();
-    void stopInputThread();
 
 private:
     int screenW, screenH;
@@ -29,9 +26,6 @@ private:
     int fd;
     int pressureMax;
     int currentSlot = 0;
-
-    std::thread* inputThread = nullptr;
-    std::atomic<bool> inputThreadRunning{false};
 
     // Map slot -> tracking ID (for active touches)
     std::map<int, int> slotToTrackingId;
