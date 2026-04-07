@@ -1,0 +1,8 @@
+pipaint
+*.o
+*.a
+*.png
+*.jpg
+*.bmp
+splash
+*.log
