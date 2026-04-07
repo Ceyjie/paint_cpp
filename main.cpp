@@ -844,8 +844,10 @@ void PiPaint::handleKeyboard(SDL_KeyboardEvent& ev) {
             newCanvas();
         } else if (ev.keysym.sym == SDLK_z && (ev.keysym.mod & KMOD_CTRL)) {
             canvas.undo();
+            updateCanvasTexture();
         } else if (ev.keysym.sym == SDLK_y && (ev.keysym.mod & KMOD_CTRL)) {
             canvas.redo();
+            updateCanvasTexture();
         } else if (ev.keysym.sym == SDLK_s && (ev.keysym.mod & KMOD_CTRL)) {
             showSaveOverlay();
         } else if (ev.keysym.sym == SDLK_o && (ev.keysym.mod & KMOD_CTRL)) {
@@ -899,8 +901,10 @@ void PiPaint::executeToolAction(const std::string& type, int index) {
         canvas.toggleBackground();
     } else if (type == "undo") {
         canvas.undo();
+        updateCanvasTexture();
     } else if (type == "redo") {
         canvas.redo();
+        updateCanvasTexture();
     } else if (type == "clear") {
         canvas.clear();
     } else if (type == "new") {
