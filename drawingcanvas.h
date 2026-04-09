@@ -43,6 +43,12 @@ public:
     Uint32 getCurrentColor() const { return currentColor; }
     Uint32 getPixelAt(int x, int y);  // returns pixel from composite (background + canvas)
 
+    // Dirty rect tracking for optimized texture updates
+    bool hasDirtyRegion() const { return hasDirty; }
+    SDL_Rect getDirtyRect() const { return dirtyRect; }
+    void clearDirty() { hasDirty = false; dirtyRect = {0, 0, 0, 0}; }
+    void markDirty(int x, int y);
+
 private:
     int width, height;
     SDL_Surface* canvas;        // drawing layer (transparent background)
@@ -55,7 +61,10 @@ private:
     std::map<int, SDL_Point> activeStrokes;
     std::deque<SDL_Surface*> undoStack;
     std::deque<SDL_Surface*> redoStack;
-    int maxUndo = 12;
+    int maxUndo = 5;
+
+    SDL_Rect dirtyRect;
+    bool hasDirty;
 
     void drawPoint(int x, int y);
     void drawCircle(int cx, int cy, int radius, Uint32 color);

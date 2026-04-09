@@ -79,11 +79,7 @@ bool TouchHandler::init() {
         return false;
     }
 
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(1, &cpuset);
-    pthread_t self = pthread_self();
-    pthread_setaffinity_np(self, sizeof(cpu_set_t), &cpuset);
+
 
     const struct input_absinfo* abs_x = libevdev_get_abs_info(dev, ABS_MT_POSITION_X);
     const struct input_absinfo* abs_y = libevdev_get_abs_info(dev, ABS_MT_POSITION_Y);
@@ -102,7 +98,7 @@ void TouchHandler::processEvents(std::vector<SDL_Event>& events) {
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(fd, &fds);
-    struct timeval tv = {0, 0};
+    struct timeval tv = {0, 10000};
     if (select(fd + 1, &fds, nullptr, nullptr, &tv) <= 0) return;
 
     struct input_event ev;

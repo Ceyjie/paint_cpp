@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <unordered_map>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -185,8 +186,8 @@ private:
     TTF_Font* fontMedium;
     TTF_Font* fontLarge;
 
-    DrawingCanvas canvas;
-    TouchHandler touch;
+    DrawingCanvas* canvas;
+    TouchHandler* touch;
 
     int toolbarHeight = 80;
     std::vector<Button> toolbarButtons;
@@ -227,9 +228,12 @@ private:
     // Color wheel
     SDL_Texture* svSquareTexture = nullptr;
     SDL_Texture* hueSliderTexture = nullptr;
+    SDL_Texture* colorWheelBtnTex = nullptr;
     int wheelTexW = 0, wheelTexH = 0;
     float currentHue = 0.0f, currentSat = 1.0f, currentVal = 1.0f;
+    float lastBuiltHue = -1.0f;
     void generateColorWheelTexture();
+    void generateSvSquareTexture();
     void showColorWheel();
     void drawColorWheelOverlay();
 
@@ -268,30 +272,15 @@ private:
     void selectCurrentFolder();
 
     void calibrate();
+
+    std::unordered_map<std::string, SDL_Texture*> textCache;
+    SDL_Texture* renderTextCached(TTF_Font* font, const std::string& text, SDL_Color col, int x, int y);
 };
 
 // ---------- PiPaint member function implementations ----------
 
-PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
-    // Check for framebuffer
-    FILE* fb = fopen("/dev/fb0", "r");
-    if (fb) {
-        fclose(fb);
-        std::cout << "Framebuffer /dev/fb0 exists" << std::endl;
-    } else {
-        std::cout << "No framebuffer /dev/fb0" << std::endl;
-    }
-    
-    // Check for DRM device
-    DIR* dri = opendir("/dev/dri");
-    if (dri) {
-        std::cout << "DRM devices available" << std::endl;
-        closedir(dri);
-    } else {
-        std::cout << "No DRM devices" << std::endl;
-    }
-    
-    const char* videoDrivers[] = {"kmsdrm", "fbdev", "directfb", nullptr};
+PiPaint::PiPaint() {
+    const char* videoDrivers[] = {"fbdev", "kmsdrm", "directfb", nullptr};
     for (int i = 0; videoDrivers[i]; i++) {
         setenv("SDL_VIDEODRIVER", videoDrivers[i], 1);
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
@@ -311,6 +300,9 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     SDL_GetCurrentDisplayMode(0, &dm);
     width = dm.w;
     height = dm.h;
+    canvas = new DrawingCanvas(width, height);
+    touch = new TouchHandler(width, height);
+    
     window = SDL_CreateWindow("Pi Paint", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                width, height, SDL_WINDOW_FULLSCREEN_DESKTOP);
     if (!window) {
@@ -318,8 +310,7 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
         exit(1);
     }
     
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer) {
         std::cerr << "Failed to create renderer: " << SDL_GetError() << std::endl;
         exit(1);
@@ -338,7 +329,7 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
     if (!fontTiny)  fontTiny  = TTF_OpenFont("DejaVuSans.ttf", 13);
     if (!fontSmall) fontSmall = TTF_OpenFont("DejaVuSans.ttf", 20);
 
-    touch.init();
+    touch->init();
     createToolbar();
 
     system("mkdir -p ~/pi-paint/drawings");
@@ -353,7 +344,7 @@ PiPaint::PiPaint() : canvas(1920, 1080), touch(1920, 1080) {
         if (testFile) tempFile = testFile;
     }
 
-    canvas.clear();
+    canvas->clear();
 }
 
 PiPaint::~PiPaint() {
@@ -361,12 +352,18 @@ PiPaint::~PiPaint() {
     TTF_CloseFont(fontSmall);
     TTF_CloseFont(fontMedium);
     TTF_CloseFont(fontLarge);
+    delete canvas;
+    delete touch;
     SDL_DestroyTexture(canvasTexture);
     SDL_FreeSurface(compositeSurface);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     if (svSquareTexture) SDL_DestroyTexture(svSquareTexture);
     if (hueSliderTexture) SDL_DestroyTexture(hueSliderTexture);
+    if (colorWheelBtnTex) SDL_DestroyTexture(colorWheelBtnTex);
+    for (auto& kv : textCache) {
+        SDL_DestroyTexture(kv.second);
+    }
     if (tempFile) fclose(tempFile);
     TTF_Quit();
     IMG_Quit();
@@ -440,15 +437,56 @@ void PiPaint::createToolbar() {
     plusBtn.rect = {x, y, sizeW, sizeH};
     plusBtn.type = "size_up";
     toolbarButtons.push_back(plusBtn);
+
+    SDL_Surface* cwSurf = SDL_CreateRGBSurfaceWithFormat(0, colorSize, colorSize, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (cwSurf) {
+        int cx = colorSize / 2, cy = colorSize / 2, r = colorSize / 2 - 2;
+        for (int i = 0; i < 360; i++) {
+            float rad = i * M_PI / 180.0f;
+            int px = cx + (int)(r * cos(rad));
+            int py = cy + (int)(r * sin(rad));
+            Uint8 cr = (int)((sin(rad)+1)/2*255);
+            Uint8 cg = (int)((sin(rad+2.094)+1)/2*255);
+            Uint8 cb = (int)((sin(rad+4.188)+1)/2*255);
+            if (px >= 0 && px < colorSize && py >= 0 && py < colorSize) {
+                ((Uint32*)cwSurf->pixels)[py * colorSize + px] = SDL_MapRGB(cwSurf->format, cr, cg, cb);
+            }
+        }
+        colorWheelBtnTex = SDL_CreateTextureFromSurface(renderer, cwSurf);
+        SDL_FreeSurface(cwSurf);
+    }
 }
 
 void PiPaint::updateCanvasTexture() {
-    SDL_Surface* composite = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (composite) {
-        canvas.compositeToSurface(composite);
-        SDL_UpdateTexture(canvasTexture, nullptr, composite->pixels, composite->pitch);
-        SDL_FreeSurface(composite);
+    canvas->compositeToSurface(compositeSurface);
+    SDL_Rect region = canvas->getDirtyRect();
+    SDL_Rect* regionPtr = canvas->hasDirtyRegion() ? &region : nullptr;
+    SDL_UpdateTexture(canvasTexture, regionPtr, compositeSurface->pixels, compositeSurface->pitch);
+    canvas->clearDirty();
+}
+
+SDL_Texture* PiPaint::renderTextCached(TTF_Font* font, const std::string& text, SDL_Color col, int x, int y) {
+    if (text.empty()) return nullptr;
+    std::string key = std::to_string((uintptr_t)font) + ":" + text + ":" +
+                      std::to_string(col.r) + std::to_string(col.g) + std::to_string(col.b);
+    auto it = textCache.find(key);
+    if (it != textCache.end()) {
+        SDL_QueryTexture(it->second, nullptr, nullptr, nullptr, nullptr);
+        SDL_Rect dst = {x, y, 0, 0};
+        SDL_QueryTexture(it->second, nullptr, nullptr, &dst.w, &dst.h);
+        SDL_RenderCopy(renderer, it->second, nullptr, &dst);
+        return it->second;
     }
+    SDL_Surface* s = TTF_RenderUTF8_Blended(font, text.c_str(), col);
+    if (!s) return nullptr;
+    SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
+    SDL_FreeSurface(s);
+    if (!t) return nullptr;
+    textCache[key] = t;
+    SDL_Rect dst = {x, y, 0, 0};
+    SDL_QueryTexture(t, nullptr, nullptr, &dst.w, &dst.h);
+    SDL_RenderCopy(renderer, t, nullptr, &dst);
+    return t;
 }
 
 void PiPaint::drawToolbar() {
@@ -477,7 +515,7 @@ void PiPaint::drawToolbar() {
             SDL_RenderFillRect(renderer, &btn.rect);
             SDL_SetRenderDrawColor(renderer, 44,44,46,255);
             SDL_RenderDrawRect(renderer, &btn.rect);
-            if (col == canvas.getCurrentColor() && !canvas.isEraserMode()) {
+            if (col == canvas->getCurrentColor() && !canvas->isEraserMode()) {
                 SDL_Rect highlight = {btn.rect.x-3, btn.rect.y-3, btn.rect.w+6, btn.rect.h+6};
                 SDL_SetRenderDrawColor(renderer, 0, 122, 255, 255);
                 SDL_RenderDrawRect(renderer, &highlight);
@@ -486,33 +524,17 @@ void PiPaint::drawToolbar() {
         } else if (btn.type == "color_wheel") {
             SDL_SetRenderDrawColor(renderer, 255,255,255,255);
             SDL_RenderFillRect(renderer, &btn.rect);
+            if (colorWheelBtnTex) {
+                SDL_RenderCopy(renderer, colorWheelBtnTex, nullptr, &btn.rect);
+            }
             SDL_SetRenderDrawColor(renderer, 44,44,46,255);
             SDL_RenderDrawRect(renderer, &btn.rect);
-            int cx = btn.rect.x + btn.rect.w/2;
-            int cy = btn.rect.y + btn.rect.h/2;
-            int r = btn.rect.w/2 - 2;
-            for (int i = 0; i < 360; i++) {
-                float rad = i * M_PI / 180.0f;
-                int x1 = cx + r * cos(rad);
-                int y1 = cy + r * sin(rad);
-                SDL_SetRenderDrawColor(renderer, 
-                    (int)((sin(rad)+1)/2*255), 
-                    (int)((sin(rad+2.094)+1)/2*255), 
-                    (int)((sin(rad+4.188)+1)/2*255), 255);
-                SDL_RenderDrawPoint(renderer, x1, y1);
-            }
             hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
         } else if (btn.type == "size_label") {
             char text[10];
             snprintf(text, sizeof(text), "%dpx", penSize);
-            SDL_Surface* surf = TTF_RenderUTF8_Blended(fontTiny, text, {44,44,46,0});
-            SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-            SDL_Rect dst = {btn.rect.x + (btn.rect.w - surf->w)/2,
-                            btn.rect.y + (btn.rect.h - surf->h)/2,
-                            surf->w, surf->h};
-            SDL_RenderCopy(renderer, tex, nullptr, &dst);
-            SDL_FreeSurface(surf);
-            SDL_DestroyTexture(tex);
+            renderTextCached(fontTiny, text, {44,44,46,255},
+                btn.rect.x + (btn.rect.w - 30)/2, btn.rect.y + (btn.rect.h - 15)/2);
         } else if (btn.type == "size_up") {
             SDL_SetRenderDrawColor(renderer, 200,200,200,255);
             SDL_RenderFillRect(renderer, &btn.rect);
@@ -547,7 +569,7 @@ void PiPaint::drawToolbar() {
             else if (btn.type == "shape_ellipse") label = "Ellipse";
 
             Uint32 bg = COLOR_LIGHT_GRAY;
-            if (btn.type == "eraser" && canvas.isEraserMode()) bg = _rgb(200, 220, 255);
+            if (btn.type == "eraser" && canvas->isEraserMode()) bg = _rgb(200, 220, 255);
             if (btn.type == "fill"   && fillArmed)             bg = _rgb(200, 255, 200);
             if (btn.type == "shape_line"    && shapeMode == ShapeMode::LINE)    bg = _rgb(220, 200, 255);
             if (btn.type == "shape_rect"    && shapeMode == ShapeMode::RECT)    bg = _rgb(220, 200, 255);
@@ -558,14 +580,8 @@ void PiPaint::drawToolbar() {
             SDL_RenderDrawRect(renderer, &btn.rect);
             hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
 
-            SDL_Surface* surf = TTF_RenderUTF8_Blended(fontTiny, label, {44,44,46,0});
-            SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-            SDL_Rect dst = {btn.rect.x + (btn.rect.w - surf->w)/2,
-                            btn.rect.y + (btn.rect.h - surf->h)/2,
-                            surf->w, surf->h};
-            SDL_RenderCopy(renderer, tex, nullptr, &dst);
-            SDL_FreeSurface(surf);
-            SDL_DestroyTexture(tex);
+            renderTextCached(fontTiny, label, {44,44,46,255},
+                btn.rect.x + (btn.rect.w - 30)/2, btn.rect.y + (btn.rect.h - 15)/2);
         }
     }
 }
@@ -595,8 +611,7 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
                 if (currentVal > 1) currentVal = 1;
                 Uint8 r, g, b;
                 hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
-                canvas.setColor(r, g, b);
-                generateColorWheelTexture();
+                canvas->setColor(r, g, b);
                 return;
             }
 
@@ -605,10 +620,13 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
                 currentHue = 1.0f - (float)(y - panelY) / svSize;
                 if (currentHue < 0) currentHue = 0;
                 if (currentHue > 1) currentHue = 1;
+                if (std::abs(currentHue - lastBuiltHue) > 0.004f) {
+                    generateSvSquareTexture();
+                    lastBuiltHue = currentHue;
+                }
                 Uint8 r, g, b;
                 hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
-                canvas.setColor(r, g, b);
-                generateColorWheelTexture();
+                canvas->setColor(r, g, b);
                 return;
             }
 
@@ -763,7 +781,7 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
     }
 
     if (fillArmed) {
-        if (activeFingers.empty()) { canvas.floodFill(x, y); fillArmed = false; }
+        if (activeFingers.empty()) { canvas->floodFill(x, y); fillArmed = false; }
     } else if (shapeMode != ShapeMode::NONE) {
         if (shapeOwnerFinger == -1) {
             shapeOwnerFinger = fingerId;
@@ -773,7 +791,7 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
         }
     } else {
         activeFingers.insert(fingerId);
-        canvas.startStroke(x, y, fingerId);
+        canvas->startStroke(x, y, fingerId);
     }
 }
 
@@ -788,7 +806,7 @@ void PiPaint::handleTouchMove(int fingerId, int x, int y) {
     if (shapeDragging && fingerId == shapeOwnerFinger) {
         shapeCurrent = {x, y};
     } else if (!shapeDragging) {
-        canvas.continueStroke(x, y, fingerId);
+        canvas->continueStroke(x, y, fingerId);
     }
 }
 
@@ -803,7 +821,7 @@ void PiPaint::handleTouchUp(int fingerId) {
         shapeDragging = false;
         shapeOwnerFinger = -1;
     } else {
-        canvas.endStroke(fingerId);
+        canvas->endStroke(fingerId);
     }
 }
 
@@ -816,7 +834,7 @@ void PiPaint::handleMouseMotion(SDL_MouseMotionEvent& ev) {
     activeFingerPos[0] = {ev.x, ev.y};
     if (!activeFingers.count(0) || ev.y <= toolbarHeight) return;
     if (shapeDragging) { shapeCurrent = {ev.x, ev.y}; }
-    else { canvas.continueStroke(ev.x, ev.y, 0); }
+    else { canvas->continueStroke(ev.x, ev.y, 0); }
 }
 
 void PiPaint::handleMouseButtonUp(SDL_MouseButtonEvent& ev) {
@@ -905,10 +923,10 @@ void PiPaint::handleKeyboard(SDL_KeyboardEvent& ev) {
         } else if (ev.keysym.sym == SDLK_n && (ev.keysym.mod & KMOD_CTRL)) {
             newCanvas();
         } else if (ev.keysym.sym == SDLK_z && (ev.keysym.mod & KMOD_CTRL)) {
-            canvas.undo();
+            canvas->undo();
             updateCanvasTexture();
         } else if (ev.keysym.sym == SDLK_y && (ev.keysym.mod & KMOD_CTRL)) {
-            canvas.redo();
+            canvas->redo();
             updateCanvasTexture();
         } else if (ev.keysym.sym == SDLK_s && (ev.keysym.mod & KMOD_CTRL)) {
             showSaveOverlay();
@@ -927,51 +945,51 @@ void PiPaint::handleKeyboard(SDL_KeyboardEvent& ev) {
 void PiPaint::executeToolAction(const std::string& type, int index) {
     if (type == "color") {
         switch (index) {
-            case 0: canvas.setColor(0,0,0); break;
-            case 1: canvas.setColor(255,59,48); break;
-            case 2: canvas.setColor(40,205,65); break;
-            case 3: canvas.setColor(0,122,255); break;
-            case 4: canvas.setColor(255,204,0); break;
-            case 5: canvas.setColor(175,82,222); break;
-            case 6: canvas.setColor(255,149,0); break;
-            case 7: canvas.setColor(255,45,85); break;
-            case 8: canvas.setColor(90,200,250); break;
-            case 9: canvas.setColor(255,255,255); break;
+            case 0: canvas->setColor(0,0,0); break;
+            case 1: canvas->setColor(255,59,48); break;
+            case 2: canvas->setColor(40,205,65); break;
+            case 3: canvas->setColor(0,122,255); break;
+            case 4: canvas->setColor(255,204,0); break;
+            case 5: canvas->setColor(175,82,222); break;
+            case 6: canvas->setColor(255,149,0); break;
+            case 7: canvas->setColor(255,45,85); break;
+            case 8: canvas->setColor(90,200,250); break;
+            case 9: canvas->setColor(255,255,255); break;
         }
     } else if (type == "color_wheel") {
         showColorWheel();
     } else if (type == "eraser") {
-        canvas.toggleEraser();
+        canvas->toggleEraser();
         shapeMode = ShapeMode::NONE;
     } else if (type == "fill") {
-        canvas.toggleFill();
-        fillArmed = canvas.isFillMode();
+        canvas->toggleFill();
+        fillArmed = canvas->isFillMode();
         shapeMode = ShapeMode::NONE;
     } else if (type == "shape_line") {
         shapeMode = (shapeMode == ShapeMode::LINE) ? ShapeMode::NONE : ShapeMode::LINE;
         fillArmed = false;
-        if (canvas.isEraserMode()) canvas.toggleEraser();
+        if (canvas->isEraserMode()) canvas->toggleEraser();
     } else if (type == "shape_rect") {
         shapeMode = (shapeMode == ShapeMode::RECT) ? ShapeMode::NONE : ShapeMode::RECT;
         fillArmed = false;
-        if (canvas.isEraserMode()) canvas.toggleEraser();
+        if (canvas->isEraserMode()) canvas->toggleEraser();
     } else if (type == "shape_ellipse") {
         shapeMode = (shapeMode == ShapeMode::ELLIPSE) ? ShapeMode::NONE : ShapeMode::ELLIPSE;
         fillArmed = false;
-        if (canvas.isEraserMode()) canvas.toggleEraser();
+        if (canvas->isEraserMode()) canvas->toggleEraser();
     } else if (type == "bg") {
-        canvas.toggleBackground();
+        canvas->toggleBackground();
         needsRender = true;
     } else if (type == "undo") {
-        canvas.undo();
+        canvas->undo();
         updateCanvasTexture();
         needsRender = true;
     } else if (type == "redo") {
-        canvas.redo();
+        canvas->redo();
         updateCanvasTexture();
         needsRender = true;
     } else if (type == "clear") {
-        canvas.clear();
+    canvas->clear();
         needsRender = true;
     } else if (type == "new") {
         newCanvas();
@@ -981,15 +999,15 @@ void PiPaint::executeToolAction(const std::string& type, int index) {
         showLoadOverlay();
     } else if (type == "size_up") {
         penSize = std::min(50, penSize + 1);
-        canvas.setSize(penSize);
+        canvas->setSize(penSize);
     } else if (type == "size_down") {
         penSize = std::max(1, penSize - 1);
-        canvas.setSize(penSize);
+        canvas->setSize(penSize);
     }
 }
 
 void PiPaint::newCanvas() {
-    canvas.resetToBlank();
+    canvas->resetToBlank();
     shapeMode = ShapeMode::NONE;
     shapeDragging = false;
     shapeOwnerFinger = -1;
@@ -999,7 +1017,7 @@ void PiPaint::showColorWheel() {
     overlayType = "color_wheel";
     showOverlay = true;
     browsingFolder = false;
-    Uint32 col = canvas.getCurrentColor();
+    Uint32 col = canvas->getCurrentColor();
     Uint8 r = (col >> 16) & 0xFF;
     Uint8 g = (col >> 8) & 0xFF;
     Uint8 b = col & 0xFF;
@@ -1008,14 +1026,34 @@ void PiPaint::showColorWheel() {
 }
 
 void PiPaint::generateColorWheelTexture() {
+    generateSvSquareTexture();
+    if (!hueSliderTexture) {
+        int svSize = 320;
+        int hueW = 40;
+        wheelTexW = svSize + hueW;
+        wheelTexH = svSize;
+        
+        SDL_Surface* hueSurf = SDL_CreateRGBSurfaceWithFormat(0, hueW, svSize, 32, SDL_PIXELFORMAT_ARGB8888);
+        if (hueSurf) {
+            for (int y = 0; y < svSize; y++) {
+                float hue = 1.0f - (float)y / svSize;
+                Uint8 rr, gg, bb;
+                hsvToRgb(hue, 1.0f, 1.0f, rr, gg, bb);
+                for (int x = 0; x < hueW; x++) {
+                    ((Uint32*)hueSurf->pixels)[y * hueW + x] = SDL_MapRGB(hueSurf->format, rr, gg, bb);
+                }
+            }
+            hueSliderTexture = SDL_CreateTextureFromSurface(renderer, hueSurf);
+            SDL_FreeSurface(hueSurf);
+        }
+    }
+    lastBuiltHue = currentHue;
+}
+
+void PiPaint::generateSvSquareTexture() {
     if (svSquareTexture) SDL_DestroyTexture(svSquareTexture);
-    if (hueSliderTexture) SDL_DestroyTexture(hueSliderTexture);
     
     int svSize = 320;
-    int hueW = 40;
-    wheelTexW = svSize + hueW;
-    wheelTexH = svSize;
-    
     SDL_Surface* svSurf = SDL_CreateRGBSurfaceWithFormat(0, svSize, svSize, 32, SDL_PIXELFORMAT_ARGB8888);
     if (!svSurf) return;
     
@@ -1030,20 +1068,6 @@ void PiPaint::generateColorWheelTexture() {
     }
     svSquareTexture = SDL_CreateTextureFromSurface(renderer, svSurf);
     SDL_FreeSurface(svSurf);
-    
-    SDL_Surface* hueSurf = SDL_CreateRGBSurfaceWithFormat(0, hueW, svSize, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (!hueSurf) return;
-    
-    for (int y = 0; y < svSize; y++) {
-        float hue = 1.0f - (float)y / svSize;
-        Uint8 rr, gg, bb;
-        hsvToRgb(hue, 1.0f, 1.0f, rr, gg, bb);
-        for (int x = 0; x < hueW; x++) {
-            ((Uint32*)hueSurf->pixels)[y * hueW + x] = SDL_MapRGB(hueSurf->format, rr, gg, bb);
-        }
-    }
-    hueSliderTexture = SDL_CreateTextureFromSurface(renderer, hueSurf);
-    SDL_FreeSurface(hueSurf);
 }
 
 void PiPaint::drawColorWheelOverlay() {
@@ -1158,7 +1182,7 @@ void PiPaint::saveCurrentDrawing() {
     if (name.size() < 4 || name.substr(name.size()-4) != ".png")
         name += ".png";
     std::string path = currentBrowsePath + "/" + name;
-    if (canvas.save(path))
+    if (canvas->save(path))
         std::cout << "Saved: " << path << "\n";
     else
         std::cerr << "Save failed: " << path << "\n";
@@ -1168,7 +1192,7 @@ void PiPaint::saveCurrentDrawing() {
 void PiPaint::loadSelectedDrawing() {
     if (selectedIndex < 0 || selectedIndex >= (int)overlayFiles.size()) return;
     std::string path = currentBrowsePath + "/" + overlayFiles[selectedIndex];
-    if (canvas.load(path))
+    if (canvas->load(path))
         std::cout << "Loaded: " << path << "\n";
     else
         std::cerr << "Load failed: " << path << "\n";
@@ -1219,17 +1243,17 @@ void PiPaint::selectCurrentFolder() {
 void PiPaint::commitShape(int x1, int y1, int x2, int y2) {
     switch (shapeMode) {
         case ShapeMode::LINE:
-            canvas.drawShapeLine(x1, y1, x2, y2);
+            canvas->drawShapeLine(x1, y1, x2, y2);
             break;
         case ShapeMode::RECT:
-            canvas.drawShapeRect(x1, y1, x2, y2);
+            canvas->drawShapeRect(x1, y1, x2, y2);
             break;
         case ShapeMode::ELLIPSE: {
             int cx = (x1 + x2) / 2;
             int cy = (y1 + y2) / 2;
             int rx = std::abs(x2 - x1) / 2;
             int ry = std::abs(y2 - y1) / 2;
-            canvas.drawShapeEllipse(cx, cy, rx, ry);
+            canvas->drawShapeEllipse(cx, cy, rx, ry);
             break;
         }
         default: break;
@@ -1242,7 +1266,7 @@ void PiPaint::drawGhostShape() {
     int x1 = shapeStart.x,   y1 = shapeStart.y;
     int x2 = shapeCurrent.x, y2 = shapeCurrent.y;
 
-    Uint32 col = canvas.getCurrentColor();
+    Uint32 col = canvas->getCurrentColor();
     Uint8 r = (col >> 16) & 0xFF;
     Uint8 g = (col >>  8) & 0xFF;
     Uint8 b =  col        & 0xFF;
@@ -1250,7 +1274,7 @@ void PiPaint::drawGhostShape() {
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, r, g, b, 180);
 
-    int thick = std::max(1, canvas.getPenSize());
+    int thick = std::max(1, canvas->getPenSize());
 
     if (shapeMode == ShapeMode::LINE) {
         for (int t = -thick/2; t <= thick/2; t++) {
@@ -1597,14 +1621,14 @@ void PiPaint::run() {
 
     while (true) {
         std::vector<SDL_Event> touchEvents;
-        touch.processEvents(touchEvents);
+        touch->processEvents(touchEvents);
         for (auto& ev : touchEvents) {
             if (ev.type == SDL_FINGERDOWN) {
                 int x = (int)(ev.tfinger.x * width);
                 int y = (int)(ev.tfinger.y * height);
                 if (ev.tfinger.pressure > 0.0f && ev.tfinger.pressure != 0.5f) {
                     int pressureSize = std::max(1, (int)(ev.tfinger.pressure * penSize * 2.0f));
-                    canvas.setSize(std::min(pressureSize, 50));
+                    canvas->setSize(std::min(pressureSize, 50));
                 }
                 handleTouchDown(ev.tfinger.fingerId, x, y);
             } else if (ev.type == SDL_FINGERMOTION) {
@@ -1612,11 +1636,11 @@ void PiPaint::run() {
                 int y = (int)(ev.tfinger.y * height);
                 if (ev.tfinger.pressure > 0.0f && ev.tfinger.pressure != 0.5f) {
                     int pressureSize = std::max(1, (int)(ev.tfinger.pressure * penSize * 2.0f));
-                    canvas.setSize(std::min(pressureSize, 50));
+                    canvas->setSize(std::min(pressureSize, 50));
                 }
                 handleTouchMove(ev.tfinger.fingerId, x, y);
             } else if (ev.type == SDL_FINGERUP) {
-                canvas.setSize(penSize);
+                canvas->setSize(penSize);
                 handleTouchUp(ev.tfinger.fingerId);
             }
         }

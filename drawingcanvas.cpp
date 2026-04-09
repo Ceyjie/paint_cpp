@@ -7,7 +7,7 @@
 #include <memory>
 #include <cstdint>
 
-DrawingCanvas::DrawingCanvas(int w, int h) : width(w), height(h) {
+DrawingCanvas::DrawingCanvas(int w, int h) : width(w), height(h), hasDirty(false), dirtyRect({0,0,0,0}) {
     canvas = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
     background = nullptr;
     currentColor = SDL_MapRGB(canvas->format, 0, 0, 0);
@@ -31,24 +31,24 @@ DrawingCanvas::~DrawingCanvas() {
 }
 
 void DrawingCanvas::clear() {
-    // Clear drawing layer to transparent
     SDL_FillRect(canvas, nullptr, SDL_MapRGBA(canvas->format, 0,0,0,0));
+    dirtyRect = {0, 0, width, height};
+    hasDirty = true;
     pushState();
 }
 
 void DrawingCanvas::resetToBlank() {
-    // Clear drawing layer to transparent
     SDL_FillRect(canvas, nullptr, SDL_MapRGBA(canvas->format, 0,0,0,0));
-    // Discard background
     if (background) {
         SDL_FreeSurface(background);
         background = nullptr;
     }
-    // Reset undo/redo
     for (auto s : undoStack) SDL_FreeSurface(s);
     for (auto s : redoStack) SDL_FreeSurface(s);
     undoStack.clear();
     redoStack.clear();
+    dirtyRect = {0, 0, width, height};
+    hasDirty = true;
     pushState();
 }
 
@@ -73,18 +73,14 @@ void DrawingCanvas::toggleFill() {
 }
 
 void DrawingCanvas::toggleBackground() {
-    // This toggles the background color of the drawing layer only
-    // (does not affect loaded background image)
     Uint32 oldBg = backgroundColor;
     backgroundColor = (oldBg == SDL_MapRGB(canvas->format, 255,255,255)) ?
                        SDL_MapRGB(canvas->format, 0,0,0) :
                        SDL_MapRGB(canvas->format, 255,255,255);
-    // Invert all non‑transparent pixels on the drawing layer
     Uint32* pixels = (Uint32*)canvas->pixels;
     int totalPixels = width * height;
     for (int i = 0; i < totalPixels; i++) {
         Uint32 pix = pixels[i];
-        // Ignore transparent pixels (alpha 0)
         if ((pix >> 24) == 0) continue;
         if (pix == oldBg) {
             pixels[i] = backgroundColor;
@@ -95,6 +91,8 @@ void DrawingCanvas::toggleBackground() {
             pixels[i] = SDL_MapRGB(canvas->format, 255 - r, 255 - g, 255 - b);
         }
     }
+    dirtyRect = {0, 0, width, height};
+    hasDirty = true;
     pushState();
 }
 
@@ -125,6 +123,7 @@ void DrawingCanvas::endStroke(int fingerId) {
 void DrawingCanvas::drawPoint(int x, int y) {
     Uint32 color = eraserMode ? SDL_MapRGBA(canvas->format, 0,0,0,0) : currentColor;
     drawCircleAA(x, y, penSize, color);
+    markDirty(x, y);
 }
 
 void DrawingCanvas::drawCircle(int cx, int cy, int radius, Uint32 color) {
@@ -252,10 +251,13 @@ void DrawingCanvas::floodFill(int x, int y) {
     
     Uint32* pixels = (Uint32*)canvas->pixels;
     int pitch = canvas->w;
+    int minX = x, maxX = x, minY = y, maxY = y;
 
     while (!queue.empty()) {
         SDL_Point p = queue.front(); queue.pop();
         pixels[p.y * pitch + p.x] = fill;
+        minX = std::min(minX, p.x); maxX = std::max(maxX, p.x);
+        minY = std::min(minY, p.y); maxY = std::max(maxY, p.y);
 
         int nx = p.x - 1;
         if (nx >= 0 && !visited[p.y * width + nx]) {
@@ -286,6 +288,8 @@ void DrawingCanvas::floodFill(int x, int y) {
             }
         }
     }
+    dirtyRect = {minX, minY, maxX - minX + 1, maxY - minY + 1};
+    hasDirty = true;
 }
 
 void DrawingCanvas::drawShapeLine(int x1, int y1, int x2, int y2) {
@@ -323,6 +327,8 @@ void DrawingCanvas::undo() {
         redoStack.push_front(undoStack.front());
         undoStack.pop_front();
         restoreState(undoStack.front());
+        dirtyRect = {0, 0, width, height};
+        hasDirty = true;
     }
 }
 
@@ -331,6 +337,8 @@ void DrawingCanvas::redo() {
         undoStack.push_front(redoStack.front());
         redoStack.pop_front();
         restoreState(undoStack.front());
+        dirtyRect = {0, 0, width, height};
+        hasDirty = true;
     }
 }
 
@@ -417,6 +425,23 @@ Uint32 DrawingCanvas::getPixelAt(int x, int y) {
 void DrawingCanvas::setPixel(int x, int y, Uint32 color, SDL_Surface* surf) {
     Uint32* pixels = (Uint32*)surf->pixels;
     pixels[y * surf->w + x] = color;
+}
+
+void DrawingCanvas::markDirty(int x, int y) {
+    SDL_Rect pt = {x - penSize, y - penSize, penSize * 2 + 1, penSize * 2 + 1};
+    if (!hasDirty) {
+        dirtyRect = pt;
+        hasDirty = true;
+    } else {
+        int left1 = dirtyRect.x, right1 = dirtyRect.x + dirtyRect.w;
+        int top1 = dirtyRect.y, bottom1 = dirtyRect.y + dirtyRect.h;
+        int left2 = pt.x, right2 = pt.x + pt.w;
+        int top2 = pt.y, bottom2 = pt.y + pt.h;
+        dirtyRect.x = std::min(left1, left2);
+        dirtyRect.y = std::min(top1, top2);
+        dirtyRect.w = std::max(right1, right2) - dirtyRect.x;
+        dirtyRect.h = std::max(bottom1, bottom2) - dirtyRect.y;
+    }
 }
 
 void DrawingCanvas::pushState() {
