@@ -30,11 +30,11 @@ private:
     // Map slot -> tracking ID (for active touches)
     std::map<int, int> slotToTrackingId;
     // Map tracking ID -> current state (coordinates, pressure)
-    struct SlotState { int x, y; float pressure; };
+    struct SlotState { int x, y; float pressure; float smoothX, smoothY; };
     std::map<int, SlotState> currentStates;
 
     void applyCalibration(int& x, int& y);
-    void generateTouchEvent(int type, int fingerId, int x, int y, float pressure, std::vector<SDL_Event>& events);
+    void generateTouchEvent(int type, int fingerId, int x, int y, float pressure, std::vector<SDL_Event>& events, int rawDx = 0, int rawDy = 0);
 };
 
 #endif

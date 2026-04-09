@@ -193,13 +193,20 @@ void TouchHandler::processEvents(std::vector<SDL_Event>& events) {
                 bool known = currentStates.count(tid) > 0;
 
                 if (!known && ss.hasPos) {
-                    // New touch: generate DOWN event
+                    // New touch: generate DOWN event, init smoothed position
                     generateTouchEvent(SDL_FINGERDOWN, tid, x, y, pressure, events);
-                    currentStates[tid] = {x, y, pressure};
+                    currentStates[tid] = {x, y, pressure, (float)x, (float)y};
                 } else if (known && ss.moved) {
-                    // Existing touch moved: generate MOTION event
-                    generateTouchEvent(SDL_FINGERMOTION, tid, x, y, pressure, events);
-                    currentStates[tid] = {x, y, pressure};
+                    // Apply EMA smoothing to reduce jitter
+                    const float ALPHA = 0.65f;
+                    auto& st = currentStates[tid];
+                    st.smoothX = ALPHA * x + (1.0f - ALPHA) * st.smoothX;
+                    st.smoothY = ALPHA * y + (1.0f - ALPHA) * st.smoothY;
+                    int sx = (int)st.smoothX;
+                    int sy = (int)st.smoothY;
+                    generateTouchEvent(SDL_FINGERMOTION, tid, sx, sy, pressure, events,
+                                       sx - st.x, sy - st.y);
+                    st.x = sx; st.y = sy; st.pressure = pressure;
                 }
             }
             // Reset moved flag for next cycle
@@ -215,14 +222,14 @@ void TouchHandler::applyCalibration(int& x, int& y) {
     y = std::max(0, std::min(screenH - 1, y));
 }
 
-void TouchHandler::generateTouchEvent(int type, int fingerId, int x, int y, float pressure, std::vector<SDL_Event>& events) {
+void TouchHandler::generateTouchEvent(int type, int fingerId, int x, int y, float pressure, std::vector<SDL_Event>& events, int rawDx, int rawDy) {
     SDL_Event e;
     e.type = type;
     e.tfinger.fingerId = fingerId;
     e.tfinger.x = x / (float)screenW;
     e.tfinger.y = y / (float)screenH;
-    e.tfinger.dx = 0;
-    e.tfinger.dy = 0;
+    e.tfinger.dx = rawDx / (float)screenW;
+    e.tfinger.dy = rawDy / (float)screenH;
     e.tfinger.pressure = pressure;
     events.push_back(e);
 }
