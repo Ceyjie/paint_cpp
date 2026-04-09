@@ -56,13 +56,6 @@ TouchHandler::TouchHandler(int w, int h) : screenW(w), screenH(h) {
     pressureMax = 255;
     dev = nullptr;
     fd = -1;
-    for (int i = 0; i < MAX_TOUCHES; i++) {
-        touchStates[i].active = false;
-        slotToTrackingId[i] = -1;
-    }
-    for (int i = 0; i < 100; i++) {
-        trackingIdToSlot[i] = -1;
-    }
 }
 
 TouchHandler::~TouchHandler() {
