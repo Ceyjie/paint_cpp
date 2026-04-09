@@ -11,18 +11,18 @@ int main() {
     system("dd if=/dev/zero of=/dev/fb0 bs=1024 count=1024 2>/dev/null");
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        std::cerr << "SDL_Init failed: " << SDL_GetError() << std::endl;
+        std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
         return 1;
     }
     if (IMG_Init(IMG_INIT_PNG) != IMG_INIT_PNG) {
-        std::cerr << "IMG_Init failed: " << IMG_GetError() << std::endl;
+        std::cerr << "IMG_Init failed: " << IMG_GetError() << '\n';
         SDL_Quit();
         return 1;
     }
 
     SDL_DisplayMode dm;
     if (SDL_GetCurrentDisplayMode(0, &dm) != 0) {
-        std::cerr << "SDL_GetCurrentDisplayMode failed: " << SDL_GetError() << std::endl;
+        std::cerr << "SDL_GetCurrentDisplayMode failed: " << SDL_GetError() << '\n';
         IMG_Quit();
         SDL_Quit();
         return 1;
@@ -32,14 +32,14 @@ int main() {
     SDL_Window* win = SDL_CreateWindow("Splash", 0, 0, w, h,
                                        SDL_WINDOW_FULLSCREEN_DESKTOP);
     if (!win) {
-        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
+        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << '\n';
         IMG_Quit();
         SDL_Quit();
         return 1;
     }
     SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
     if (!ren) {
-        std::cerr << "SDL_CreateRenderer failed: " << SDL_GetError() << std::endl;
+        std::cerr << "SDL_CreateRenderer failed: " << SDL_GetError() << '\n';
         SDL_DestroyWindow(win);
         IMG_Quit();
         SDL_Quit();
@@ -53,7 +53,7 @@ int main() {
         SDL_DestroyTexture(tex);
         SDL_FreeSurface(img);
     } else {
-        std::cerr << "Could not load splash.png, using solid color." << std::endl;
+        std::cerr << "Could not load splash.png, using solid color." << '\n';
         SDL_SetRenderDrawColor(ren, 30, 30, 50, 255);
         SDL_RenderClear(ren);
     }
@@ -68,10 +68,10 @@ int main() {
     // Launch the main application
     const char* app_path = "/home/snsu/paint_cpp/pipaint";
     if (access(app_path, X_OK) != 0) {
-        std::cerr << "Main application not found or not executable: " << app_path << std::endl;
+        std::cerr << "Main application not found or not executable: " << app_path << '\n';
         return 1;
     }
     execl(app_path, "pipaint", nullptr);
-    std::cerr << "exec failed: " << strerror(errno) << std::endl;
+    std::cerr << "exec failed: " << strerror(errno) << '\n';
     return 1;
 }

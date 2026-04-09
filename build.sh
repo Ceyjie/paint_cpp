@@ -1,8 +1,8 @@
 #!/bin/bash
 ARCH=$(uname -m)
 if [ "$ARCH" = "armv7l" ] || [ "$ARCH" = "armv6l" ] || [ "$ARCH" = "aarch64" ]; then
-    # Orange Pi / ARM optimizations
-    CXXFLAGS="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard -ffast-math"
+    # Orange Pi / ARM optimizations - Cortex-A7 specific NEON
+    CXXFLAGS="-march=armv7-a+neon-vfpv4 -mtune=cortex-a7 -mfloat-abi=hard -mfpu=neon-vfpv4 -ffast-math"
 fi
 
 g++ -std=c++17 -O2 $CXXFLAGS \

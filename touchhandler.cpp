@@ -24,7 +24,7 @@ static std::string findTouchDevice() {
         struct libevdev* dev = nullptr;
         if (libevdev_new_from_fd(fd, &dev) == 0) {
             const char* name = libevdev_get_name(dev);
-            std::cout << "Found input device: " << name << " at " << path << std::endl;
+            std::cout << "Found input device: " << name << " at " << path << '\n';
             if (name && (strstr(name, "Touch") || strstr(name, "p403") || 
                          strstr(name, "Virtual Ink") || strstr(name, "gt9") ||
                          strstr(name, "touch") || strstr(name, " Touch") ||
@@ -56,6 +56,13 @@ TouchHandler::TouchHandler(int w, int h) : screenW(w), screenH(h) {
     pressureMax = 255;
     dev = nullptr;
     fd = -1;
+    for (int i = 0; i < MAX_TOUCHES; i++) {
+        touchStates[i].active = false;
+        slotToTrackingId[i] = -1;
+    }
+    for (int i = 0; i < 100; i++) {
+        trackingIdToSlot[i] = -1;
+    }
 }
 
 TouchHandler::~TouchHandler() {
@@ -69,7 +76,7 @@ bool TouchHandler::init() {
         std::cerr << "No touch device found.\n";
         return false;
     }
-    std::cout << "Using touch device: " << devicePath << std::endl;
+    std::cout << "Using touch device: " << devicePath << '\n';
     fd = open(devicePath.c_str(), O_RDONLY | O_NONBLOCK);
     if (fd < 0) return false;
 
@@ -88,7 +95,7 @@ bool TouchHandler::init() {
     if (abs_y) touchYMax = abs_y->maximum;
     if (abs_p) pressureMax = abs_p->maximum;
     std::cout << "Touch range: " << touchXMax << "x" << touchYMax
-              << " pressure max: " << pressureMax << std::endl;
+              << " pressure max: " << pressureMax << '\n';
     return true;
 }
 

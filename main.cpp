@@ -286,7 +286,7 @@ PiPaint::PiPaint() {
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
             SDL_DisplayMode dm;
             if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
-                std::cout << "Using video driver: " << videoDrivers[i] << std::endl;
+                std::cout << "Using video driver: " << videoDrivers[i] << '\n';
                 break;
             }
             SDL_Quit();
@@ -306,19 +306,19 @@ PiPaint::PiPaint() {
     window = SDL_CreateWindow("Pi Paint", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                width, height, SDL_WINDOW_FULLSCREEN_DESKTOP);
     if (!window) {
-        std::cerr << "Failed to create window: " << SDL_GetError() << std::endl;
+        std::cerr << "Failed to create window: " << SDL_GetError() << '\n';
         exit(1);
     }
     
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer) {
-        std::cerr << "Failed to create renderer: " << SDL_GetError() << std::endl;
+        std::cerr << "Failed to create renderer: " << SDL_GetError() << '\n';
         exit(1);
     }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_RendererInfo info;
     SDL_GetRendererInfo(renderer, &info);
-    std::cout << "Renderer: " << info.name << std::endl;
+    std::cout << "Renderer: " << info.name << '\n';
     
     canvasTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
     compositeSurface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
@@ -1682,8 +1682,6 @@ void PiPaint::run() {
             drawGhostShape();
             SDL_RenderPresent(renderer);
             needsRender = false;
-        } else {
-            SDL_Delay(1);
         }
     }
 }
