@@ -171,7 +171,6 @@ void DrawingCanvas::blendPixel(int x, int y, Uint32 color, float alpha) {
 void DrawingCanvas::drawCircleAA(int cx, int cy, int radius, Uint32 color) {
     if (radius <= 1) { drawCircle(cx, cy, radius, color); return; }
 
-    float r = (float)radius;
     int r2 = radius * radius;
     int iy0 = std::max(0, cy - radius - 1);
     int iy1 = std::min(height - 1, cy + radius + 1);
@@ -179,26 +178,31 @@ void DrawingCanvas::drawCircleAA(int cx, int cy, int radius, Uint32 color) {
     int pitch = canvas->w;
 
     for (int y = iy0; y <= iy1; y++) {
-        float dy = (float)(y - cy);
-        float edgeDist = r - std::abs(dy);
-        if (edgeDist < -1.0f) continue;
-
-        float halfW = std::sqrt(std::max(0.0f, r*r - dy*dy));
-        int x0 = (int)(cx - halfW);
-        int x1 = (int)(cx + halfW);
+        int dy = y - cy;
+        int ady = dy < 0 ? -dy : dy;
+        int halfW = 0;
+        for (int x = 1; x <= radius; x++) {
+            if (x * x + ady * ady <= r2) halfW = x;
+            else break;
+        }
+        int x0 = cx - halfW;
+        int x1 = cx + halfW;
 
         int sx0 = std::max(0, x0);
         int sx1 = std::min(width - 1, x1);
         for (int x = sx0; x <= sx1; x++)
             pixels[y * pitch + x] = color;
 
-        float leftFrac = (cx - halfW) - (float)x0;
-        if (leftFrac > 0.0f && x0 - 1 >= 0)
-            blendPixel(x0 - 1, y, color, leftFrac);
-
-        float rightFrac = (float)(x1 + 1) - (cx + halfW);
-        if (rightFrac > 0.0f && x1 + 1 < width)
-            blendPixel(x1 + 1, y, color, rightFrac);
+        if (x0 - 1 >= 0 && halfW < radius) {
+            float leftFrac = (float)(halfW + 1) - std::sqrt((float)(r2 - ady * ady));
+            if (leftFrac > 0.0f && leftFrac < 1.0f)
+                blendPixel(x0 - 1, y, color, leftFrac);
+        }
+        if (x1 + 1 < width && halfW < radius) {
+            float rightFrac = (float)(halfW + 1) - std::sqrt((float)(r2 - ady * ady));
+            if (rightFrac > 0.0f && rightFrac < 1.0f)
+                blendPixel(x1 + 1, y, color, rightFrac);
+        }
     }
 }
 
@@ -207,26 +211,23 @@ void DrawingCanvas::drawThickLine(int x1, int y1, int x2, int y2) {
         drawPoint(x1, y1);
         return;
     }
-    
+
     int dx = abs(x2 - x1), dy = abs(y2 - y1);
     int sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
     int err = dx - dy;
-    
+
     int r = penSize;
-    int r2 = r * r;
-    
+    Uint32 color = eraserMode ? SDL_MapRGBA(canvas->format, 0,0,0,0) : currentColor;
+    int interval = std::max(1, r / 2);
+    int stepCount = 0;
+
     while (true) {
-        for (int dy = -r; dy <= r; dy++) {
-            for (int dx = -r; dx <= r; dx++) {
-                if (dx*dx + dy*dy <= r2) {
-                    int px = x1 + dx, py = y1 + dy;
-                    if (px >= 0 && px < width && py >= 0 && py < height) {
-                        setPixel(px, py, eraserMode ? SDL_MapRGBA(canvas->format, 0,0,0,0) : currentColor, canvas);
-                    }
-                }
-            }
+        if (stepCount % interval == 0) {
+            drawCircleAA(x1, y1, r, color);
+            markDirty(x1, y1);
         }
-        
+        stepCount++;
+
         if (x1 == x2 && y1 == y2) break;
         int e2 = err * 2;
         if (e2 > -dy) { err -= dy; x1 += sx; }

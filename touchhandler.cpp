@@ -98,7 +98,7 @@ void TouchHandler::processEvents(std::vector<SDL_Event>& events) {
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(fd, &fds);
-    struct timeval tv = {0, 10000};
+    struct timeval tv = {0, 500};
     if (select(fd + 1, &fds, nullptr, nullptr, &tv) <= 0) return;
 
     struct input_event ev;
