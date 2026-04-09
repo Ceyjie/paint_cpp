@@ -12,13 +12,12 @@
 #include <cmath>
 #include <filesystem>
 #include <dirent.h>
+#include <ctime>
 #include "drawingcanvas.h"
 #include "touchhandler.h"
 
 namespace fs = std::filesystem;
 
-// ---------- forward declarations ----------
-static void hoverHighlight(SDL_Renderer* r, SDL_Rect rect, SDL_Point hover, SDL_Point tap, Uint32 tapTime, Uint32 flashMs);
 static const Uint32 TAP_FLASH_MS = 180;
 
 // ---------- helper functions (placed early so they are visible) ----------
@@ -99,6 +98,142 @@ static void hoverHighlight(SDL_Renderer* r, SDL_Rect rect,
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 }
 
+static void drawRoundedBorder(SDL_Renderer* r, SDL_Rect rect, int radius, Uint8 R, Uint8 G, Uint8 B) {
+    SDL_SetRenderDrawColor(r, R, G, B, 255);
+    SDL_RenderDrawLine(r, rect.x + radius, rect.y, rect.x + rect.w - radius, rect.y);
+    SDL_RenderDrawLine(r, rect.x + rect.w, rect.y + radius, rect.x + rect.w, rect.y + rect.h - radius);
+    SDL_RenderDrawLine(r, rect.x + radius, rect.y + rect.h, rect.x + rect.w - radius, rect.y + rect.h);
+    SDL_RenderDrawLine(r, rect.x, rect.y + radius, rect.x, rect.y + rect.h - radius);
+    for (int i = 0; i <= radius; i++) {
+        float angle1 = M_PI, angle2 = M_PI * 1.5;
+        int x1 = rect.x + radius + (int)(radius * cos(angle1));
+        int y1 = rect.y + radius + (int)(radius * sin(angle1));
+        int x2 = rect.x + rect.w - radius + (int)(radius * cos(angle2));
+        int y2 = rect.y + radius + (int)(radius * sin(angle2));
+        (void)x1; (void)y1; (void)x2; (void)y2;
+    }
+    for (int dy = -radius; dy <= 0; dy++) {
+        for (int dx = -radius; dx <= 0; dx++) {
+            if (dx*dx + dy*dy <= radius*radius) {
+                SDL_RenderDrawPoint(r, rect.x + radius + dx, rect.y + radius + dy);
+                break;
+            }
+        }
+    }
+    for (int dy = -radius; dy <= 0; dy++) {
+        for (int dx = 0; dx <= radius; dx++) {
+            if (dx*dx + dy*dy <= radius*radius) {
+                SDL_RenderDrawPoint(r, rect.x + rect.w - radius + dx, rect.y + radius + dy);
+                break;
+            }
+        }
+    }
+    for (int dy = 0; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= 0; dx++) {
+            if (dx*dx + dy*dy <= radius*radius) {
+                SDL_RenderDrawPoint(r, rect.x + radius + dx, rect.y + rect.h - radius + dy);
+                break;
+            }
+        }
+    }
+    for (int dy = 0; dy <= radius; dy++) {
+        for (int dx = 0; dx <= radius; dx++) {
+            if (dx*dx + dy*dy <= radius*radius) {
+                SDL_RenderDrawPoint(r, rect.x + rect.w - radius + dx, rect.y + rect.h - radius + dy);
+                break;
+            }
+        }
+    }
+}
+
+static void drawModernButton(SDL_Renderer* r, SDL_Rect rect, Uint32 bgColor, Uint32 borderColor,
+                            const char* label, TTF_Font* font, SDL_Color textColor, bool selected) {
+    if (selected) {
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(r, 0, 100, 200, 40);
+        SDL_Rect shadowRect = {rect.x + 2, rect.y + 2, rect.w, rect.h};
+        fillRoundRect(r, shadowRect, 8, 0, 100, 200, 40);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    }
+    
+    SDL_SetRenderDrawColor(r, (bgColor>>16)&0xFF, (bgColor>>8)&0xFF, bgColor&0xFF, 255);
+    fillRoundRect(r, rect, 8, (bgColor>>16)&0xFF, (bgColor>>8)&0xFF, bgColor&0xFF, 255);
+    
+    drawRoundedBorder(r, rect, 8, (borderColor>>16)&0xFF, (borderColor>>8)&0xFF, borderColor&0xFF);
+    
+    if (label) {
+        int tw, th;
+        TTF_SizeText(font, label, &tw, &th);
+        int tx = rect.x + (rect.w - tw) / 2;
+        int ty = rect.y + (rect.h - th) / 2;
+        renderText(r, font, label, textColor, tx, ty);
+    }
+}
+
+static void drawColorSwatch(SDL_Renderer* r, SDL_Rect rect, Uint32 color, bool selected) {
+    SDL_SetRenderDrawColor(r, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, 255);
+    fillRoundRect(r, rect, 6, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, 255);
+    
+    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
+    drawRoundedBorder(r, rect, 6, 255, 255, 255);
+    
+    if (selected) {
+        SDL_SetRenderDrawColor(r, 0, 122, 255, 255);
+        SDL_Rect selRect = {rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4};
+        drawRoundedBorder(r, selRect, 8, 0, 122, 255);
+    }
+}
+
+static void drawCircleButton(SDL_Renderer* r, SDL_Rect rect, Uint32 bgColor, Uint32 borderColor,
+                            const char* label, TTF_Font* font, SDL_Color textColor, bool selected) {
+    int cx = rect.x + rect.w / 2;
+    int cy = rect.y + rect.h / 2;
+    int radius = rect.w / 2;
+    
+    if (selected) {
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(r, 0, 100, 200, 40);
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                if (dx*dx + dy*dy <= radius*radius) {
+                    SDL_RenderDrawPoint(r, cx + dx + 1, cy + dy + 1);
+                }
+            }
+        }
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    }
+    
+    SDL_SetRenderDrawColor(r, (bgColor>>16)&0xFF, (bgColor>>8)&0xFF, bgColor&0xFF, 255);
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx*dx + dy*dy <= radius*radius) {
+                SDL_RenderDrawPoint(r, cx + dx, cy + dy);
+            }
+        }
+    }
+    
+    SDL_SetRenderDrawColor(r, (borderColor>>16)&0xFF, (borderColor>>8)&0xFF, borderColor&0xFF, 255);
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx*dx + dy*dy <= radius*radius && dx*dx + dy*dy >= (radius-1)*(radius-1)) {
+                SDL_RenderDrawPoint(r, cx + dx, cy + dy);
+            }
+        }
+    }
+    
+    if (label) {
+        int tw, th;
+        TTF_SizeText(font, label, &tw, &th);
+        int tx = rect.x + (rect.w - tw) / 2;
+        int ty = rect.y + (rect.h - th) / 2;
+        renderText(r, font, label, textColor, tx, ty);
+    }
+}
+
+static SDL_Color uintToColor(Uint32 c) {
+    return {(Uint8)((c>>16)&0xFF), (Uint8)((c>>8)&0xFF), (Uint8)(c&0xFF), 255};
+}
+
 // ---------- colour helpers ----------
 static void rgbToHsv(Uint8 r, Uint8 g, Uint8 b, float &h, float &s, float &v) {
     float rf = r / 255.0f, gf = g / 255.0f, bf = b / 255.0f;
@@ -139,7 +274,7 @@ static void hsvToRgb(float h, float s, float v, Uint8 &r, Uint8 &g, Uint8 &b) {
     b = (Uint8)(bb * 255);
 }
 
-// ---------- colour definitions ----------
+// ---------- Modern UI colour definitions ----------
 namespace {
     SDL_PixelFormat* _fmt = SDL_AllocFormat(SDL_PIXELFORMAT_ARGB8888);
     inline Uint32 _rgb(Uint8 r, Uint8 g, Uint8 b) { return SDL_MapRGB(_fmt, r, g, b); }
@@ -147,6 +282,18 @@ namespace {
 
 const Uint32 COLOR_WHITE      = _rgb(255, 255, 255);
 const Uint32 COLOR_BLACK      = _rgb(  0,   0,   0);
+const Uint32 COLOR_LIGHT_GRAY = _rgb(240, 240, 245);
+const Uint32 COLOR_DARK_GRAY  = _rgb( 50,  50,  55);
+const Uint32 COLOR_BORDER     = _rgb(210, 210, 215);
+const Uint32 COLOR_BORDER_DARK= _rgb(180, 180, 185);
+const Uint32 COLOR_TOOLBAR_BG = _rgb(248, 248, 252);
+const Uint32 COLOR_BTN_BG     = _rgb(255, 255, 255);
+const Uint32 COLOR_BTN_HOVER  = _rgb(245, 245, 250);
+const Uint32 COLOR_BTN_ACTIVE = _rgb(  0, 122, 255);
+const Uint32 COLOR_TEXT       = _rgb( 50,  50,  55);
+const Uint32 COLOR_TEXT_WHITE = _rgb(255, 255, 255);
+const Uint32 COLOR_SHADOW     = _rgb(180, 180, 190);
+
 const Uint32 COLOR_RED        = _rgb(255,  59,  48);
 const Uint32 COLOR_GREEN      = _rgb( 40, 205,  65);
 const Uint32 COLOR_BLUE       = _rgb(  0, 122, 255);
@@ -155,11 +302,26 @@ const Uint32 COLOR_PURPLE     = _rgb(175,  82, 222);
 const Uint32 COLOR_ORANGE     = _rgb(255, 149,   0);
 const Uint32 COLOR_PINK       = _rgb(255,  45,  85);
 const Uint32 COLOR_CYAN       = _rgb( 90, 200, 250);
-const Uint32 COLOR_LIGHT_GRAY = _rgb(229, 229, 234);
-const Uint32 COLOR_DARK_GRAY  = _rgb( 44,  44,  46);
-const Uint32 COLOR_TOOLBAR_BG = _rgb(240, 240, 245);
-const Uint32 COLOR_BORDER     = _rgb(180, 180, 185);
-const Uint32 COLOR_HIGHLIGHT  = _rgb(180, 200, 255);
+
+struct PalettePreset {
+    std::string name;
+    std::vector<Uint32> colors;
+};
+
+static const std::vector<PalettePreset> PALETTE_PRESETS = {
+    {"Material", {_rgb(0,0,0), _rgb(244,67,54), _rgb(76,175,80), _rgb(33,150,243),
+                  _rgb(255,235,59), _rgb(156,39,176), _rgb(255,152,0), _rgb(233,30,99),
+                  _rgb(0,188,212), _rgb(255,255,255)}},
+    {"Pastel", {_rgb(255,182,193), _rgb(255,218,185), _rgb(255,255,210), _rgb(189,255,201),
+                _rgb(186,225,255), _rgb(230,187,228), _rgb(254,200,216), _rgb(212,165,165),
+                _rgb(240,230,140), _rgb(250,240,230)}},
+    {"Neon", {_rgb(255,7,58), _rgb(255,0,255), _rgb(0,255,255), _rgb(57,255,20),
+              _rgb(255,110,199), _rgb(191,0,255), _rgb(0,255,127), _rgb(255,69,0),
+              _rgb(123,104,238), _rgb(255,255,0)}},
+    {"Earth", {_rgb(139,69,19), _rgb(160,82,45), _rgb(210,180,140), _rgb(189,183,107),
+               _rgb(210,105,30), _rgb(244,164,96), _rgb(139,115,85), _rgb(188,143,143),
+               _rgb(196,196,196), _rgb(192,128,64)}}
+};
 
 // ---------- Button structure ----------
 struct Button {
@@ -189,7 +351,7 @@ private:
     DrawingCanvas* canvas;
     TouchHandler* touch;
 
-    int toolbarHeight = 80;
+    int toolbarHeight = 68;
     std::vector<Button> toolbarButtons;
     int penSize = 5;
     bool fillArmed = false;
@@ -225,17 +387,21 @@ private:
     Uint32    lastTapTime  = 0;
     FILE*     tempFile    = nullptr;
 
-    // Color wheel
+    // Color wheel / Palette
     SDL_Texture* svSquareTexture = nullptr;
     SDL_Texture* hueSliderTexture = nullptr;
-    SDL_Texture* colorWheelBtnTex = nullptr;
     int wheelTexW = 0, wheelTexH = 0;
     float currentHue = 0.0f, currentSat = 1.0f, currentVal = 1.0f;
     float lastBuiltHue = -1.0f;
-    void generateColorWheelTexture();
+    int selectedPaletteIndex = 0;
+    int selectedSwatchIndex = -1;
+    std::vector<Uint32> currentPalette;
     void generateSvSquareTexture();
-    void showColorWheel();
-    void drawColorWheelOverlay();
+    void showPalette();
+    void drawPaletteOverlay();
+    void savePalette(const std::string& filename);
+    bool loadPalette(const std::string& filename);
+    void resetCustomPalette();
 
     void createToolbar();
     void updateCanvasTexture();
@@ -280,26 +446,58 @@ private:
 // ---------- PiPaint member function implementations ----------
 
 PiPaint::PiPaint() {
-    const char* videoDrivers[] = {"fbdev", "kmsdrm", "directfb", nullptr};
-    for (int i = 0; videoDrivers[i]; i++) {
-        setenv("SDL_VIDEODRIVER", videoDrivers[i], 1);
+    const char* fbDrivers[] = {"fbdev", "kmsdrm", nullptr};
+    const char* desktopDrivers[] = {"x11", "wayland", nullptr};
+    
+    bool initialized = false;
+    
+    for (int i = 0; fbDrivers[i]; i++) {
+        setenv("SDL_VIDEODRIVER", fbDrivers[i], 1);
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
             SDL_DisplayMode dm;
-            if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
-                std::cout << "Using video driver: " << videoDrivers[i] << std::endl;
+            if (SDL_GetCurrentDisplayMode(0, &dm) == 0 && dm.w > 0 && dm.h > 0) {
+                std::cout << "Using video driver: " << fbDrivers[i] << std::endl;
+                initialized = true;
                 break;
             }
             SDL_Quit();
         }
     }
     
+    if (!initialized) {
+        for (int i = 0; desktopDrivers[i]; i++) {
+            setenv("SDL_VIDEODRIVER", desktopDrivers[i], 1);
+            if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) == 0) {
+                SDL_DisplayMode dm;
+                if (SDL_GetCurrentDisplayMode(0, &dm) == 0 && dm.w > 0 && dm.h > 0) {
+                    std::cout << "Using video driver: " << desktopDrivers[i] << std::endl;
+                    initialized = true;
+                    break;
+                }
+                SDL_Quit();
+            }
+        }
+    }
+    
+    if (!initialized) {
+        SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+        std::cout << "Using default video driver" << std::endl;
+    }
+    
     IMG_Init(IMG_INIT_PNG);
     TTF_Init();
 
     SDL_DisplayMode dm;
-    SDL_GetCurrentDisplayMode(0, &dm);
-    width = dm.w;
-    height = dm.h;
+    if (SDL_GetCurrentDisplayMode(0, &dm) != 0 || dm.w <= 0 || dm.h <= 0) {
+        width = 1280;
+        height = 720;
+    } else {
+        width = dm.w;
+        height = dm.h;
+    }
+    
+    currentPalette = PALETTE_PRESETS[0].colors;
+    
     canvas = new DrawingCanvas(width, height);
     touch = new TouchHandler(width, height);
     
@@ -310,7 +508,9 @@ PiPaint::PiPaint() {
         exit(1);
     }
     
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE | SDL_RENDERER_PRESENTVSYNC);
+    int rendererFlags = SDL_RENDERER_SOFTWARE;
+    if (getenv("SDL_RENDERER_VSYNC")) rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
+    renderer = SDL_CreateRenderer(window, -1, rendererFlags);
     if (!renderer) {
         std::cerr << "Failed to create renderer: " << SDL_GetError() << std::endl;
         exit(1);
@@ -319,6 +519,7 @@ PiPaint::PiPaint() {
     SDL_RendererInfo info;
     SDL_GetRendererInfo(renderer, &info);
     std::cout << "Renderer: " << info.name << std::endl;
+    std::cout << "Display: " << width << "x" << height << std::endl;
     
     canvasTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
     compositeSurface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
@@ -360,7 +561,6 @@ PiPaint::~PiPaint() {
     SDL_DestroyWindow(window);
     if (svSquareTexture) SDL_DestroyTexture(svSquareTexture);
     if (hueSliderTexture) SDL_DestroyTexture(hueSliderTexture);
-    if (colorWheelBtnTex) SDL_DestroyTexture(colorWheelBtnTex);
     for (auto& kv : textCache) {
         SDL_DestroyTexture(kv.second);
     }
@@ -371,11 +571,10 @@ PiPaint::~PiPaint() {
 }
 
 void PiPaint::createToolbar() {
-    int colorSize = 40, margin = 8;
+    int colorSize = 36, margin = 4;
     int y = (toolbarHeight - colorSize) / 2;
-    int x = 10;
-    const Uint32 colors[10] = {COLOR_BLACK, COLOR_RED, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW,
-                               COLOR_PURPLE, COLOR_ORANGE, COLOR_PINK, COLOR_CYAN, COLOR_WHITE};
+    int x = 8;
+    
     for (int i = 0; i < 10; i++) {
         Button btn;
         btn.rect = {x, y, colorSize, colorSize};
@@ -385,17 +584,19 @@ void PiPaint::createToolbar() {
         x += colorSize + margin;
     }
 
-    // Color wheel button
-    Button wheelBtn;
-    wheelBtn.rect = {x, y, colorSize, colorSize};
-    wheelBtn.type = "color_wheel";
-    toolbarButtons.push_back(wheelBtn);
-    x += colorSize + margin;
+    x += margin;
+    
+    Button paletteBtn;
+    paletteBtn.rect = {x, y, 80, 32};
+    paletteBtn.type = "palette";
+    paletteBtn.index = 0;
+    toolbarButtons.push_back(paletteBtn);
+    x += 80 + margin;
 
-    int btnW = 60, btnH = 35;
-    margin = 6;
+    int btnW = 64, btnH = 30;
+    margin = 4;
     y = (toolbarHeight - btnH) / 2;
-    struct { std::string label; std::string type; } textBtns[] = {
+    struct { const char* label; const char* type; } textBtns[] = {
         {"Eraser",   "eraser"},
         {"Fill",     "fill"},
         {"Bg",       "bg"},
@@ -413,48 +614,34 @@ void PiPaint::createToolbar() {
         Button btn;
         btn.rect = {x, y, btnW, btnH};
         btn.type = tb.type;
+        btn.index = 0;
         toolbarButtons.push_back(btn);
         x += btnW + margin;
     }
 
-    int sizeW = 35, sizeH = 35;
-    margin = 5;
-    y = (toolbarHeight - sizeH) / 2;
+    int sizeBtn = 32;
+    margin = 3;
+    y = (toolbarHeight - sizeBtn) / 2;
 
     Button minusBtn;
-    minusBtn.rect = {x, y, sizeW, sizeH};
+    minusBtn.rect = {x, y, sizeBtn, sizeBtn};
     minusBtn.type = "size_down";
+    minusBtn.index = 0;
     toolbarButtons.push_back(minusBtn);
-    x += sizeW + margin;
+    x += sizeBtn + margin;
 
     Button sizeLabel;
-    sizeLabel.rect = {x, y, 45, sizeH};
+    sizeLabel.rect = {x, y, 40, sizeBtn};
     sizeLabel.type = "size_label";
+    sizeLabel.index = 0;
     toolbarButtons.push_back(sizeLabel);
-    x += 45 + margin;
+    x += 40 + margin;
 
     Button plusBtn;
-    plusBtn.rect = {x, y, sizeW, sizeH};
+    plusBtn.rect = {x, y, sizeBtn, sizeBtn};
     plusBtn.type = "size_up";
+    plusBtn.index = 0;
     toolbarButtons.push_back(plusBtn);
-
-    SDL_Surface* cwSurf = SDL_CreateRGBSurfaceWithFormat(0, colorSize, colorSize, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (cwSurf) {
-        int cx = colorSize / 2, cy = colorSize / 2, r = colorSize / 2 - 2;
-        for (int i = 0; i < 360; i++) {
-            float rad = i * M_PI / 180.0f;
-            int px = cx + (int)(r * cos(rad));
-            int py = cy + (int)(r * sin(rad));
-            Uint8 cr = (int)((sin(rad)+1)/2*255);
-            Uint8 cg = (int)((sin(rad+2.094)+1)/2*255);
-            Uint8 cb = (int)((sin(rad+4.188)+1)/2*255);
-            if (px >= 0 && px < colorSize && py >= 0 && py < colorSize) {
-                ((Uint32*)cwSurf->pixels)[py * colorSize + px] = SDL_MapRGB(cwSurf->format, cr, cg, cb);
-            }
-        }
-        colorWheelBtnTex = SDL_CreateTextureFromSurface(renderer, cwSurf);
-        SDL_FreeSurface(cwSurf);
-    }
 }
 
 void PiPaint::updateCanvasTexture() {
@@ -491,68 +678,35 @@ SDL_Texture* PiPaint::renderTextCached(TTF_Font* font, const std::string& text, 
 
 void PiPaint::drawToolbar() {
     SDL_Rect toolbarBg = {0, 0, width, toolbarHeight};
-    SDL_SetRenderDrawColor(renderer, 240, 240, 245, 255);
+    SDL_SetRenderDrawColor(renderer, (COLOR_TOOLBAR_BG>>16)&0xFF, (COLOR_TOOLBAR_BG>>8)&0xFF, COLOR_TOOLBAR_BG&0xFF, 255);
     SDL_RenderFillRect(renderer, &toolbarBg);
-    SDL_SetRenderDrawColor(renderer, 180, 180, 185, 255);
+    SDL_SetRenderDrawColor(renderer, (COLOR_BORDER>>16)&0xFF, (COLOR_BORDER>>8)&0xFF, COLOR_BORDER&0xFF, 255);
     SDL_RenderDrawLine(renderer, 0, toolbarHeight, width, toolbarHeight);
 
+    Uint32 currentColor = canvas->getCurrentColor();
+    
     for (auto& btn : toolbarButtons) {
         if (btn.type == "color") {
-            Uint32 col = 0;
-            switch (btn.index) {
-                case 0: col = COLOR_BLACK; break;
-                case 1: col = COLOR_RED; break;
-                case 2: col = COLOR_GREEN; break;
-                case 3: col = COLOR_BLUE; break;
-                case 4: col = COLOR_YELLOW; break;
-                case 5: col = COLOR_PURPLE; break;
-                case 6: col = COLOR_ORANGE; break;
-                case 7: col = COLOR_PINK; break;
-                case 8: col = COLOR_CYAN; break;
-                case 9: col = COLOR_WHITE; break;
-            }
-            SDL_SetRenderDrawColor(renderer, (col>>16)&0xFF, (col>>8)&0xFF, col&0xFF, 255);
-            SDL_RenderFillRect(renderer, &btn.rect);
-            SDL_SetRenderDrawColor(renderer, 44,44,46,255);
-            SDL_RenderDrawRect(renderer, &btn.rect);
-            if (col == canvas->getCurrentColor() && !canvas->isEraserMode()) {
-                SDL_Rect highlight = {btn.rect.x-3, btn.rect.y-3, btn.rect.w+6, btn.rect.h+6};
-                SDL_SetRenderDrawColor(renderer, 0, 122, 255, 255);
-                SDL_RenderDrawRect(renderer, &highlight);
-            }
-            hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
-        } else if (btn.type == "color_wheel") {
-            SDL_SetRenderDrawColor(renderer, 255,255,255,255);
-            SDL_RenderFillRect(renderer, &btn.rect);
-            if (colorWheelBtnTex) {
-                SDL_RenderCopy(renderer, colorWheelBtnTex, nullptr, &btn.rect);
-            }
-            SDL_SetRenderDrawColor(renderer, 44,44,46,255);
-            SDL_RenderDrawRect(renderer, &btn.rect);
-            hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+            Uint32 col = currentPalette[btn.index];
+            bool isSelected = (col == currentColor && !canvas->isEraserMode());
+            drawColorSwatch(renderer, btn.rect, col, isSelected);
+        } else if (btn.type == "palette") {
+            bool isActive = showOverlay && overlayType == "palette";
+            drawModernButton(renderer, btn.rect, COLOR_BTN_BG, COLOR_BORDER, "Palette", fontTiny, uintToColor(COLOR_TEXT), isActive);
         } else if (btn.type == "size_label") {
-            char text[10];
+            char text[16];
             snprintf(text, sizeof(text), "%dpx", penSize);
-            renderTextCached(fontTiny, text, {44,44,46,255},
-                btn.rect.x + (btn.rect.w - 30)/2, btn.rect.y + (btn.rect.h - 15)/2);
+            int tw, th;
+            TTF_SizeText(fontTiny, text, &tw, &th);
+            int tx = btn.rect.x + (btn.rect.w - tw) / 2;
+            int ty = btn.rect.y + (btn.rect.h - th) / 2;
+            renderText(renderer, fontTiny, text, uintToColor(COLOR_TEXT), tx, ty);
         } else if (btn.type == "size_up") {
-            SDL_SetRenderDrawColor(renderer, 200,200,200,255);
-            SDL_RenderFillRect(renderer, &btn.rect);
-            SDL_SetRenderDrawColor(renderer, 44,44,46,255);
-            SDL_RenderDrawRect(renderer, &btn.rect);
-            SDL_RenderDrawLine(renderer, btn.rect.x+btn.rect.w/2, btn.rect.y+10,
-                               btn.rect.x+btn.rect.w/2, btn.rect.y+btn.rect.h-10);
-            SDL_RenderDrawLine(renderer, btn.rect.x+10, btn.rect.y+btn.rect.h/2,
-                               btn.rect.x+btn.rect.w-10, btn.rect.y+btn.rect.h/2);
-            hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+            bool isActive = false;
+            drawCircleButton(renderer, btn.rect, COLOR_BTN_BG, COLOR_BORDER, "+", fontMedium, uintToColor(COLOR_TEXT), isActive);
         } else if (btn.type == "size_down") {
-            SDL_SetRenderDrawColor(renderer, 200,200,200,255);
-            SDL_RenderFillRect(renderer, &btn.rect);
-            SDL_SetRenderDrawColor(renderer, 44,44,46,255);
-            SDL_RenderDrawRect(renderer, &btn.rect);
-            SDL_RenderDrawLine(renderer, btn.rect.x+10, btn.rect.y+btn.rect.h/2,
-                               btn.rect.x+btn.rect.w-10, btn.rect.y+btn.rect.h/2);
-            hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
+            bool isActive = false;
+            drawCircleButton(renderer, btn.rect, COLOR_BTN_BG, COLOR_BORDER, "-", fontMedium, uintToColor(COLOR_TEXT), isActive);
         } else {
             const char* label = "";
             if (btn.type == "eraser") label = "Eraser";
@@ -568,20 +722,16 @@ void PiPaint::drawToolbar() {
             else if (btn.type == "shape_rect")    label = "Rect";
             else if (btn.type == "shape_ellipse") label = "Ellipse";
 
-            Uint32 bg = COLOR_LIGHT_GRAY;
-            if (btn.type == "eraser" && canvas->isEraserMode()) bg = _rgb(200, 220, 255);
-            if (btn.type == "fill"   && fillArmed)             bg = _rgb(200, 255, 200);
-            if (btn.type == "shape_line"    && shapeMode == ShapeMode::LINE)    bg = _rgb(220, 200, 255);
-            if (btn.type == "shape_rect"    && shapeMode == ShapeMode::RECT)    bg = _rgb(220, 200, 255);
-            if (btn.type == "shape_ellipse" && shapeMode == ShapeMode::ELLIPSE) bg = _rgb(220, 200, 255);
-            SDL_SetRenderDrawColor(renderer, (bg>>16)&0xFF, (bg>>8)&0xFF, bg&0xFF, 255);
-            SDL_RenderFillRect(renderer, &btn.rect);
-            SDL_SetRenderDrawColor(renderer, 44, 44, 46, 255);
-            SDL_RenderDrawRect(renderer, &btn.rect);
-            hoverHighlight(renderer, btn.rect, lastTouchPos, lastTapPos, lastTapTime, TAP_FLASH_MS);
-
-            renderTextCached(fontTiny, label, {44,44,46,255},
-                btn.rect.x + (btn.rect.w - 30)/2, btn.rect.y + (btn.rect.h - 15)/2);
+            Uint32 bg = COLOR_BTN_BG;
+            if (btn.type == "eraser" && canvas->isEraserMode()) bg = COLOR_BTN_ACTIVE;
+            else if (btn.type == "fill"   && fillArmed)             bg = COLOR_BTN_ACTIVE;
+            else if (btn.type == "shape_line"    && shapeMode == ShapeMode::LINE)    bg = COLOR_BTN_ACTIVE;
+            else if (btn.type == "shape_rect"    && shapeMode == ShapeMode::RECT)    bg = COLOR_BTN_ACTIVE;
+            else if (btn.type == "shape_ellipse" && shapeMode == ShapeMode::ELLIPSE) bg = COLOR_BTN_ACTIVE;
+            
+            bool isActive = (bg == COLOR_BTN_ACTIVE);
+            SDL_Color textCol = isActive ? uintToColor(COLOR_TEXT_WHITE) : uintToColor(COLOR_TEXT);
+            drawModernButton(renderer, btn.rect, bg, COLOR_BORDER, label, fontTiny, textCol, false);
         }
     }
 }
@@ -593,18 +743,56 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
     lastTapTime  = SDL_GetTicks();
 
     if (showOverlay) {
-        if (overlayType == "color_wheel") {
-            int svSize = 320;
-            int hueW = 40;
-            int btnW = 100, btnH = 48;
-            int totalW = svSize + hueW + 60;
-            int totalH = svSize + 80;
-            int panelX = (width - totalW) / 2;
-            int panelY = (height - totalH) / 2;
+        if (overlayType == "palette") {
+            int svSize = 280;
+            int hueW = 36, hueH = 280;
+            int swatchSize = 48, swatchMargin = 8;
+            int btnW = 120, btnH = 40;
+            
+            int panelW = svSize + hueW + 60;
+            int panelH = 100 + svSize + 80 + btnH + 20;
+            int panelX = (width - panelW) / 2;
+            int panelY = (height - panelH) / 2;
 
-            if (x >= panelX && x <= panelX + svSize && y >= panelY && y <= panelY + svSize) {
-                currentSat = (float)(x - panelX) / svSize;
-                currentVal = 1.0f - (float)(y - panelY) / svSize;
+            int tabY = panelY + 10;
+            int tabW = 100, tabH = 32;
+            int tabsX = panelX + 10;
+            for (int i = 0; i < 5; i++) {
+                SDL_Rect tabRect = {tabsX + i * (tabW + 8), tabY, tabW, tabH};
+                if (x >= tabRect.x && x <= tabRect.x + tabRect.w && y >= tabRect.y && y <= tabRect.y + tabRect.h) {
+                    selectedPaletteIndex = i;
+                    if (i == 4) {
+                        selectedSwatchIndex = -1;
+                    }
+                    return;
+                }
+            }
+
+            int swatchY = panelY + 55;
+            std::vector<Uint32>& displayColors = (selectedPaletteIndex < 4) ? 
+                const_cast<std::vector<PalettePreset>&>(PALETTE_PRESETS)[selectedPaletteIndex].colors : currentPalette;
+            
+            for (int row = 0; row < 2; row++) {
+                for (int col = 0; col < 5; col++) {
+                    int idx = row * 5 + col;
+                    if (idx >= (int)displayColors.size()) break;
+                    SDL_Rect sRect = {tabsX + col * (swatchSize + swatchMargin), 
+                                     swatchY + row * (swatchSize + swatchMargin), 
+                                     swatchSize, swatchSize};
+                    if (x >= sRect.x && x <= sRect.x + sRect.w && y >= sRect.y && y <= sRect.y + sRect.h) {
+                        selectedSwatchIndex = idx;
+                        Uint32 col = displayColors[idx];
+                        canvas->setColor((col>>16)&0xFF, (col>>8)&0xFF, col&0xFF);
+                        return;
+                    }
+                }
+            }
+
+            int pickerY = swatchY + 2 * (swatchSize + swatchMargin) + 20;
+            SDL_Rect svRect = {panelX + 20, pickerY, svSize, svSize};
+            if (x >= svRect.x && x <= svRect.x + svRect.w && y >= svRect.y && y <= svRect.y + svRect.h) {
+                currentSat = (float)(x - svRect.x) / svSize;
+                currentVal = 1.0f - (float)(y - svRect.y) / svSize;
                 if (currentSat < 0) currentSat = 0;
                 if (currentSat > 1) currentSat = 1;
                 if (currentVal < 0) currentVal = 0;
@@ -612,27 +800,57 @@ void PiPaint::handleTouchDown(int fingerId, int x, int y) {
                 Uint8 r, g, b;
                 hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
                 canvas->setColor(r, g, b);
+                if (selectedSwatchIndex >= 0 && selectedSwatchIndex < 10) {
+                    currentPalette[selectedSwatchIndex] = _rgb(r, g, b);
+                }
                 return;
             }
 
-            int hueX = panelX + svSize + 20;
-            if (x >= hueX && x <= hueX + hueW && y >= panelY && y <= panelY + svSize) {
-                currentHue = 1.0f - (float)(y - panelY) / svSize;
+            int hueX = svRect.x + svSize + 15;
+            SDL_Rect hueRect = {hueX, pickerY, hueW, hueH};
+            if (x >= hueRect.x && x <= hueRect.x + hueRect.w && y >= hueRect.y && y <= hueRect.y + hueRect.h) {
+                currentHue = 1.0f - (float)(y - hueRect.y) / hueH;
                 if (currentHue < 0) currentHue = 0;
                 if (currentHue > 1) currentHue = 1;
-                if (std::abs(currentHue - lastBuiltHue) > 0.004f) {
-                    generateSvSquareTexture();
-                    lastBuiltHue = currentHue;
-                }
+                generateSvSquareTexture();
                 Uint8 r, g, b;
                 hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
                 canvas->setColor(r, g, b);
                 return;
             }
 
-            int btnX = panelX + (totalW - btnW) / 2;
-            int btnY = panelY + svSize + 20 + 40 + 15;
-            if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
+            int btnY = panelY + panelH - btnH - 15;
+            int btnSpacing = (panelW - btnW * 4 - 30) / 3;
+            
+            SDL_Rect saveBtn = {panelX + 15, btnY, btnW, btnH};
+            SDL_Rect loadBtn = {saveBtn.x + btnW + btnSpacing/2, btnY, btnW, btnH};
+            SDL_Rect resetBtn = {loadBtn.x + btnW + btnSpacing/2, btnY, btnW, btnH};
+            SDL_Rect closeBtn = {resetBtn.x + btnW + btnSpacing/2, btnY, btnW, btnH};
+
+            if (x >= saveBtn.x && x <= saveBtn.x + saveBtn.w && y >= saveBtn.y && y <= saveBtn.y + saveBtn.h) {
+                system("mkdir -p ~/pi-paint/palettes");
+                time_t now = time(nullptr);
+                char fname[256];
+                char timebuf[64];
+                strftime(timebuf, sizeof(timebuf), "%Y-%m-%d_%H%M%S", localtime(&now));
+                snprintf(fname, sizeof(fname), "%s/palette_%s.json", std::string(getenv("HOME") ? getenv("HOME") : ".").c_str(), timebuf);
+                savePalette(fname);
+                return;
+            }
+
+            if (x >= loadBtn.x && x <= loadBtn.x + loadBtn.w && y >= loadBtn.y && y <= loadBtn.y + loadBtn.h) {
+                showOverlay = false;
+                overlayType = "load_palette";
+                showLoadOverlay();
+                return;
+            }
+
+            if (x >= resetBtn.x && x <= resetBtn.x + resetBtn.w && y >= resetBtn.y && y <= resetBtn.y + resetBtn.h) {
+                resetCustomPalette();
+                return;
+            }
+
+            if (x >= closeBtn.x && x <= closeBtn.x + closeBtn.w && y >= closeBtn.y && y <= closeBtn.y + closeBtn.h) {
                 showOverlay = false;
                 return;
             }
@@ -956,8 +1174,8 @@ void PiPaint::executeToolAction(const std::string& type, int index) {
             case 8: canvas->setColor(90,200,250); break;
             case 9: canvas->setColor(255,255,255); break;
         }
-    } else if (type == "color_wheel") {
-        showColorWheel();
+    } else if (type == "palette") {
+        showPalette();
     } else if (type == "eraser") {
         canvas->toggleEraser();
         shapeMode = ShapeMode::NONE;
@@ -1013,47 +1231,23 @@ void PiPaint::newCanvas() {
     shapeOwnerFinger = -1;
 }
 
-void PiPaint::showColorWheel() {
-    overlayType = "color_wheel";
+void PiPaint::showPalette() {
+    overlayType = "palette";
     showOverlay = true;
     browsingFolder = false;
+    selectedSwatchIndex = -1;
     Uint32 col = canvas->getCurrentColor();
     Uint8 r = (col >> 16) & 0xFF;
     Uint8 g = (col >> 8) & 0xFF;
     Uint8 b = col & 0xFF;
     rgbToHsv(r, g, b, currentHue, currentSat, currentVal);
-    if (svSquareTexture == nullptr) generateColorWheelTexture();
-}
-
-void PiPaint::generateColorWheelTexture() {
     generateSvSquareTexture();
-    if (!hueSliderTexture) {
-        int svSize = 320;
-        int hueW = 40;
-        wheelTexW = svSize + hueW;
-        wheelTexH = svSize;
-        
-        SDL_Surface* hueSurf = SDL_CreateRGBSurfaceWithFormat(0, hueW, svSize, 32, SDL_PIXELFORMAT_ARGB8888);
-        if (hueSurf) {
-            for (int y = 0; y < svSize; y++) {
-                float hue = 1.0f - (float)y / svSize;
-                Uint8 rr, gg, bb;
-                hsvToRgb(hue, 1.0f, 1.0f, rr, gg, bb);
-                for (int x = 0; x < hueW; x++) {
-                    ((Uint32*)hueSurf->pixels)[y * hueW + x] = SDL_MapRGB(hueSurf->format, rr, gg, bb);
-                }
-            }
-            hueSliderTexture = SDL_CreateTextureFromSurface(renderer, hueSurf);
-            SDL_FreeSurface(hueSurf);
-        }
-    }
-    lastBuiltHue = currentHue;
 }
 
 void PiPaint::generateSvSquareTexture() {
     if (svSquareTexture) SDL_DestroyTexture(svSquareTexture);
     
-    int svSize = 320;
+    int svSize = 280;
     SDL_Surface* svSurf = SDL_CreateRGBSurfaceWithFormat(0, svSize, svSize, 32, SDL_PIXELFORMAT_ARGB8888);
     if (!svSurf) return;
     
@@ -1070,34 +1264,60 @@ void PiPaint::generateSvSquareTexture() {
     SDL_FreeSurface(svSurf);
 }
 
-void PiPaint::drawColorWheelOverlay() {
-    int svSize = 320;
-    int hueW = 40;
-    int previewW = 80, previewH = 40;
-    int btnW = 100, btnH = 48;
-    int totalW = svSize + hueW + 60;
-    int totalH = svSize + 80;
-    int panelX = (width - totalW) / 2;
-    int panelY = (height - totalH) / 2;
+void PiPaint::drawPaletteOverlay() {
+    int svSize = 280;
+    int hueW = 36, hueH = 280;
+    int swatchSize = 48, swatchMargin = 8;
+    int btnW = 120, btnH = 40;
+    
+    int panelW = svSize + hueW + 60;
+    int panelH = 100 + svSize + 80 + btnH + 20;
+    int panelX = (width - panelW) / 2;
+    int panelY = (height - panelH) / 2;
 
-    SDL_Rect svRect = {panelX, panelY, svSize, svSize};
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_Rect bg = {panelX, panelY, panelW, panelH};
+    SDL_RenderFillRect(renderer, &bg);
+    SDL_SetRenderDrawColor(renderer, 180, 180, 185, 255);
+    SDL_RenderDrawRect(renderer, &bg);
+
+    int tabY = panelY + 10;
+    int tabW = 100, tabH = 32;
+    int tabsX = panelX + 10;
+    struct { const char* label; } tabs[] = {
+        {"Material"}, {"Pastel"}, {"Neon"}, {"Earth"}, {"Custom"}
+    };
+    for (int i = 0; i < 5; i++) {
+        SDL_Rect tabRect = {tabsX + i * (tabW + 8), tabY, tabW, tabH};
+        bool isActive = (selectedPaletteIndex == i);
+        Uint32 bg = isActive ? COLOR_BTN_ACTIVE : COLOR_BTN_BG;
+        SDL_Color txt = isActive ? uintToColor(COLOR_TEXT_WHITE) : uintToColor(COLOR_TEXT);
+        drawModernButton(renderer, tabRect, bg, COLOR_BORDER, (char*)tabs[i].label, fontTiny, txt, false);
+    }
+
+    int swatchY = panelY + 55;
+    std::vector<Uint32>& displayColors = (selectedPaletteIndex < 4) ? 
+        const_cast<std::vector<PalettePreset>&>(PALETTE_PRESETS)[selectedPaletteIndex].colors : currentPalette;
+    
+    for (int row = 0; row < 2; row++) {
+        for (int col = 0; col < 5; col++) {
+            int idx = row * 5 + col;
+            if (idx >= (int)displayColors.size()) break;
+            SDL_Rect sRect = {tabsX + col * (swatchSize + swatchMargin), 
+                             swatchY + row * (swatchSize + swatchMargin), 
+                             swatchSize, swatchSize};
+            drawColorSwatch(renderer, sRect, displayColors[idx], false);
+        }
+    }
+
+    int pickerY = swatchY + 2 * (swatchSize + swatchMargin) + 20;
+    SDL_Rect svRect = {panelX + 20, pickerY, svSize, svSize};
     SDL_RenderCopy(renderer, svSquareTexture, nullptr, &svRect);
-    SDL_SetRenderDrawColor(renderer, 44, 44, 46, 255);
+    SDL_SetRenderDrawColor(renderer, 180, 180, 185, 255);
     SDL_RenderDrawRect(renderer, &svRect);
 
-    int hueX = panelX + svSize + 20;
-    SDL_Rect hueRect = {hueX, panelY, hueW, svSize};
-    SDL_RenderCopy(renderer, hueSliderTexture, nullptr, &hueRect);
-    SDL_RenderDrawRect(renderer, &hueRect);
-
-    int markerY = panelY + (int)((1.0f - currentHue) * svSize);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    SDL_RenderDrawLine(renderer, hueX - 5, markerY, hueX + hueW + 5, markerY);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderDrawLine(renderer, hueX - 7, markerY, hueX + hueW + 7, markerY);
-
-    int svX = panelX + (int)(currentSat * svSize);
-    int svY = panelY + (int)((1.0f - currentVal) * svSize);
+    int svX = svRect.x + (int)(currentSat * svSize);
+    int svY = svRect.y + (int)((1.0f - currentVal) * svSize);
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderDrawLine(renderer, svX - 6, svY, svX + 6, svY);
     SDL_RenderDrawLine(renderer, svX, svY - 6, svX, svY + 6);
@@ -1105,139 +1325,86 @@ void PiPaint::drawColorWheelOverlay() {
     SDL_RenderDrawLine(renderer, svX - 8, svY, svX + 8, svY);
     SDL_RenderDrawLine(renderer, svX, svY - 8, svX, svY + 8);
 
-    Uint8 pr, pg, pb;
-    hsvToRgb(currentHue, currentSat, currentVal, pr, pg, pb);
-    SDL_Rect preview = {panelX + (svSize - previewW) / 2, panelY + svSize + 20, previewW, previewH};
-    SDL_SetRenderDrawColor(renderer, pr, pg, pb, 255);
-    SDL_RenderFillRect(renderer, &preview);
-    SDL_SetRenderDrawColor(renderer, 44, 44, 46, 255);
-    SDL_RenderDrawRect(renderer, &preview);
-
-    int btnX = panelX + (totalW - btnW) / 2;
-    int btnY = panelY + svSize + 20 + previewH + 15;
-    SDL_SetRenderDrawColor(renderer, 232, 232, 236, 255);
-    SDL_Rect closeBtn = {btnX, btnY, btnW, btnH};
-    SDL_RenderFillRect(renderer, &closeBtn);
+    int hueX = svRect.x + svSize + 15;
+    SDL_Rect hueRect = {hueX, pickerY, hueW, hueH};
+    for (int y = 0; y < hueH; y++) {
+        float hue = 1.0f - (float)y / hueH;
+        Uint8 rr, gg, bb;
+        hsvToRgb(hue, 1.0f, 1.0f, rr, gg, bb);
+        SDL_SetRenderDrawColor(renderer, rr, gg, bb, 255);
+        SDL_RenderDrawLine(renderer, hueX, pickerY + y, hueX + hueW, pickerY + y);
+    }
     SDL_SetRenderDrawColor(renderer, 180, 180, 185, 255);
-    SDL_RenderDrawRect(renderer, &closeBtn);
-    renderText(renderer, fontSmall, "Close", {44, 44, 46, 255}, btnX + 30, btnY + 12);
+    SDL_RenderDrawRect(renderer, &hueRect);
+
+    int markerY = pickerY + (int)((1.0f - currentHue) * hueH);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawLine(renderer, hueX - 3, markerY, hueX + hueW + 3, markerY);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderDrawLine(renderer, hueX - 5, markerY, hueX + hueW + 5, markerY);
+
+    int btnY = panelY + panelH - btnH - 15;
+    int btnSpacing = (panelW - btnW * 4 - 30) / 3;
+    
+    SDL_Rect saveBtn = {panelX + 15, btnY, btnW, btnH};
+    drawModernButton(renderer, saveBtn, COLOR_BTN_BG, COLOR_BORDER, "Save", fontTiny, uintToColor(COLOR_TEXT), false);
+    
+    SDL_Rect loadBtn = {saveBtn.x + btnW + btnSpacing/2, btnY, btnW, btnH};
+    drawModernButton(renderer, loadBtn, COLOR_BTN_BG, COLOR_BORDER, "Load", fontTiny, uintToColor(COLOR_TEXT), false);
+    
+    SDL_Rect resetBtn = {loadBtn.x + btnW + btnSpacing/2, btnY, btnW, btnH};
+    drawModernButton(renderer, resetBtn, COLOR_BTN_BG, COLOR_BORDER, "Reset", fontTiny, uintToColor(COLOR_TEXT), false);
+    
+    SDL_Rect closeBtn = {resetBtn.x + btnW + btnSpacing/2, btnY, btnW, btnH};
+    drawModernButton(renderer, closeBtn, COLOR_BTN_BG, COLOR_BORDER, "Close", fontTiny, uintToColor(COLOR_TEXT), false);
 }
 
-// ---------- file list helpers ----------
+void PiPaint::savePalette(const std::string& filename) {
+    FILE* f = fopen(filename.c_str(), "w");
+    if (!f) return;
+    fprintf(f, "{\n  \"name\": \"My Palette\",\n");
+    time_t now = time(nullptr);
+    char timebuf[64];
+    strftime(timebuf, sizeof(timebuf), "%Y-%m-%d_%H%M%S", localtime(&now));
+    fprintf(f, "  \"created\": \"%s\",\n", timebuf);
+    fprintf(f, "  \"colors\": [\n");
+    for (int i = 0; i < 10; i++) {
+        Uint32 c = currentPalette[i];
+        fprintf(f, "    \"#%02X%02X%02X\"%s\n", 
+                (c>>16)&0xFF, (c>>8)&0xFF, c&0xFF,
+                i < 9 ? "," : "");
+    }
+    fprintf(f, "  ]\n}\n");
+    fclose(f);
+}
 
-void PiPaint::refreshFileList() {
-    overlayFiles.clear();
-    overlayScroll = 0;
-    selectedIndex = -1;
-    std::error_code ec;
-    for (auto& entry : fs::directory_iterator(currentBrowsePath, ec)) {
-        if (entry.is_regular_file(ec)) {
-            std::string ext = entry.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")
-                overlayFiles.push_back(entry.path().filename().string());
+bool PiPaint::loadPalette(const std::string& filename) {
+    FILE* f = fopen(filename.c_str(), "r");
+    if (!f) return false;
+    char line[256];
+    bool inColors = false;
+    int colorIdx = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, "\"colors\"")) {
+            inColors = true;
+            continue;
+        }
+        if (inColors && strstr(line, "\"")) {
+            int r, g, b;
+            if (sscanf(line, "    \"#%2x%2x%2x\"", &r, &g, &b) == 3) {
+                if (colorIdx < 10) {
+                    currentPalette[colorIdx] = _rgb(r, g, b);
+                    colorIdx++;
+                }
+            }
         }
     }
-    std::sort(overlayFiles.begin(), overlayFiles.end());
+    fclose(f);
+    return colorIdx > 0;
 }
 
-void PiPaint::refreshSubdirs() {
-    subdirs.clear();
-    browseScroll = 0;
-    selectedSubdir = -1;
-    std::error_code ec;
-    for (auto& entry : fs::directory_iterator(currentBrowsePath, ec)) {
-        if (entry.is_directory(ec))
-            subdirs.push_back(entry.path().filename().string());
-    }
-    std::sort(subdirs.begin(), subdirs.end());
-}
-
-std::string PiPaint::generateRandomFilename() {
-    return "drawing_" + std::to_string(time(nullptr)) + ".png";
-}
-
-void PiPaint::showSaveOverlay() {
-    overlayType = "save";
-    showOverlay = true;
-    browsingFolder = false;
-    filenameInput = generateRandomFilename();
-    cursorPos = (int)filenameInput.size();
-    refreshFileList();
-    refreshSubdirs();
-}
-
-void PiPaint::showLoadOverlay() {
-    overlayType = "load";
-    showOverlay = true;
-    browsingFolder = false;
-    filenameInput = "";
-    selectedIndex = -1;
-    refreshFileList();
-    refreshSubdirs();
-}
-
-void PiPaint::saveCurrentDrawing() {
-    std::string name = filenameInput.empty() ? generateRandomFilename() : filenameInput;
-    if (name.size() < 4 || name.substr(name.size()-4) != ".png")
-        name += ".png";
-    std::string path = currentBrowsePath + "/" + name;
-    if (canvas->save(path))
-        std::cout << "Saved: " << path << "\n";
-    else
-        std::cerr << "Save failed: " << path << "\n";
-    showOverlay = false;
-}
-
-void PiPaint::loadSelectedDrawing() {
-    if (selectedIndex < 0 || selectedIndex >= (int)overlayFiles.size()) return;
-    std::string path = currentBrowsePath + "/" + overlayFiles[selectedIndex];
-    if (canvas->load(path))
-        std::cout << "Loaded: " << path << "\n";
-    else
-        std::cerr << "Load failed: " << path << "\n";
-    showOverlay = false;
-}
-
-void PiPaint::enterFolderBrowser() {
-    browsingFolder = true;
-    refreshSubdirs();
-}
-
-void PiPaint::goUp() {
-    fs::path p(currentBrowsePath);
-    if (p.has_parent_path() && p != p.root_path()) {
-        currentBrowsePath = p.parent_path().string();
-        refreshSubdirs();
-        refreshFileList();
-    }
-}
-
-void PiPaint::goHome() {
-    const char* home = getenv("HOME");
-    currentBrowsePath = home ? std::string(home) + "/pi-paint/drawings" : "/home/pi/pi-paint/drawings";
-    fs::create_directories(currentBrowsePath);
-    refreshSubdirs();
-    refreshFileList();
-    browsingFolder = false;
-}
-
-void PiPaint::goMedia() {
-    currentBrowsePath = "/media";
-    refreshSubdirs();
-    refreshFileList();
-    browsingFolder = false;
-}
-
-void PiPaint::selectCurrentFolder() {
-    if (selectedSubdir >= 0 && selectedSubdir < (int)subdirs.size()) {
-        currentBrowsePath += "/" + subdirs[selectedSubdir];
-        refreshSubdirs();
-        refreshFileList();
-        selectedSubdir = -1;
-    } else {
-        browsingFolder = false;
-    }
+void PiPaint::resetCustomPalette() {
+    currentPalette = PALETTE_PRESETS[0].colors;
 }
 
 void PiPaint::commitShape(int x1, int y1, int x2, int y2) {
@@ -1425,8 +1592,8 @@ void PiPaint::drawOverlay() {
     { SDL_Rect _r={0,0,width,height}; SDL_RenderFillRect(renderer,&_r); }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-    if (overlayType == "color_wheel") {
-        drawColorWheelOverlay();
+    if (overlayType == "palette") {
+        drawPaletteOverlay();
         return;
     }
 
